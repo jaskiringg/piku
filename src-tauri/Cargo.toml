@@ -1,0 +1,28 @@
+[package]
+name = "piku"
+version = "0.0.1"
+description = "Piku — Your AI Companion"
+authors = []
+edition = "2021"
+
+# Tauri requires a lib target for mobile compatibility
+[lib]
+name = "piku_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

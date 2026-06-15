@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+.venv/
+
+# Build output
+dist/
+src-tauri/target/
+
+# OS / editor junk
+.DS_Store
+*.log
+
+# Local agent / editor config
+.claude/
+
+# Personal & runtime data (not source code)
+piku-vault/
+memory/
+obsedian for piku/

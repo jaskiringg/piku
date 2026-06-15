@@ -1,0 +1,60 @@
+{
+  "productName": "piku",
+  "version": "0.0.1",
+  "identifier": "com.piku.shell",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "title": "Piku",
+        "label": "overlay",
+        "width": 1280,
+        "height": 832,
+        "minWidth": 720,
+        "minHeight": 480,
+        "center": true,
+        "fullscreen": false,
+        "maximized": true,
+        "transparent": false,
+        "decorations": true,
+        "resizable": true,
+        "minimizable": true,
+        "alwaysOnTop": false,
+        "visible": true
+      },
+      {
+        "title": "Piku Orb",
+        "label": "orb",
+        "width": 600,
+        "height": 240,
+        "transparent": true,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

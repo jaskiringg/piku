@@ -1,0 +1,13 @@
+{
+  "identifier": "main",
+  "description": "Main OS window + ambient orb popup permissions",
+  "windows": ["overlay", "orb"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible"
+  ]
+}

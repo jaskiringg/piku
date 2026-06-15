@@ -1,0 +1,202 @@
+Yes, let’s start.
+
+And for Pico specifically, I’d choose Claude Code over Gemini CLI as the primary builder.
+
+Why Claude Code?
+
+For v0.0 we’re not building AI.
+
+We’re building:
+
+* Desktop application
+* Tauri
+* Animations
+* UI architecture
+* Overlay system
+* Global hotkeys
+* System tray
+* State management
+
+Claude is currently much stronger at:
+
+* Large codebase consistency
+* Architecture
+* Refactoring
+* UI implementation
+* Product-driven development
+
+Gemini CLI can be used later as one of Pico’s own model connectors.
+
+For building Pico:
+
+Primary Builder:
+Claude Code
+Secondary Reviewer:
+Gemini CLI
+
+⸻
+
+Before We Start
+
+I need answers to only 4 questions.
+
+1. Platform
+
+For v0.0 are we building:
+
+A. Mac only
+
+or
+
+B. Mac + Windows eventually
+
+I recommend:
+
+Mac Only
+
+for now.
+
+⸻
+
+2. Voice
+
+Should Piku initially:
+
+A. Text only
+
+or
+
+B. Voice + Text
+
+I recommend:
+
+Text first
+
+Voice later.
+
+⸻
+
+3. Animation
+
+Should Piku be:
+
+A. 2D Animated Core
+
+or
+
+B. Real-time 3D Core
+
+I strongly recommend:
+
+2D Animated Core
+
+for v0.0.
+
+⸻
+
+4. Invocation
+
+Preferred:
+
+⌥ + Space
+
+or something else?
+
+⸻
+
+What We Are Actually Building First
+
+Not Pico.
+
+Not AI.
+
+Not Memory.
+
+Not Research.
+
+⸻
+
+We are building:
+
+Piku Shell
+
+Think:
+
+Jarvis Body
+
+before
+
+Jarvis Brain
+
+⸻
+
+The first milestone should allow:
+
+Launch
+
+Piku starts with Mac
+
+⸻
+
+Tray
+
+Piku sits in menu bar
+
+⸻
+
+Hotkey
+
+⌥ + Space
+
+⸻
+
+Overlay
+
+Piku appears over any app.
+
+⸻
+
+Presence
+
+Animated core.
+
+Black background.
+
+Minimal blue.
+
+Breathing.
+
+Thinking.
+
+Listening.
+
+⸻
+
+Chat
+
+Basic text conversation.
+
+No intelligence yet.
+
+Mock responses acceptable.
+
+⸻
+
+First Claude Code Prompt
+
+Once you answer the 4 questions above, I’ll give you the actual v0.0 prompt.
+
+It’ll be a serious prompt that tells Claude Code:
+
+* repository structure
+* architecture
+* tech stack
+* UI behavior
+* state management
+* animations
+* what not to build yet
+* what success looks like
+
+so it generates the correct foundation instead of jumping ahead into Gmail, memory, projects, and AI integrations.
+
+Also, I’ve read the Pico master context you uploaded and we’ll use that as the canonical vision moving forward.  ￼
