@@ -258,6 +258,7 @@ class OllamaService {
     onContent?:  (delta: string) => void,
     temperature = 0.4,
     timeoutMs   = CHAT_TIMEOUT,
+    think       = true,   // false → skip reasoning, emit the answer directly (reliable-output fallback)
   ): Promise<{ content: string; thinking: string; toolCalls: OllamaToolCall[] }> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -265,7 +266,7 @@ class OllamaService {
       const res = await this.post('/api/chat', {
         model:   CHAT_MODEL,
         stream:  true,
-        think:   true,
+        think,
         keep_alive: CHAT_KEEP_ALIVE,
         messages,
         tools,
@@ -296,6 +297,27 @@ class OllamaService {
       }
       return { content: stripThinkingTokens(content).trim(), thinking: thinking.trim(), toolCalls }
     } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  // One-shot JSON response (no streaming, no thinking) — used for the reasoning-flow planner.
+  // Ollama's format:'json' constrains output to valid JSON so we can parse it reliably.
+  async chatJSON<T = unknown>(messages: OllamaChatMessage[], timeoutMs = 60_000): Promise<T | null> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const res = await this.post('/api/chat', {
+        model: CHAT_MODEL, stream: false, think: false, keep_alive: CHAT_KEEP_ALIVE,
+        format: 'json', messages,
+        options: { temperature: 0.3, num_ctx: NUM_CTX, num_predict: 700 },
+      }, controller.signal)
+      if (!res.ok) return null
+      const data = await res.json() as { message?: { content?: string } }
+      const txt = data.message?.content?.trim()
+      if (!txt) return null
+      try { return JSON.parse(txt) as T } catch { return null }
+    } catch { return null } finally {
       clearTimeout(timer)
     }
   }

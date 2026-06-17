@@ -10,6 +10,8 @@ import { voiceService } from '../../../services/VoiceService'
 import { projectService } from '../../projects/components/ProjectDashboard'
 import { agentHub } from './agentSession'
 import { PIKU_PERSONA } from '../../../lib/persona'
+import { planReasoning } from '../../../services/ReasoningPlanner'
+import type { ReasoningFlow } from '../../../services/ReasoningPlanner'
 
 const AGENT_SYSTEM_PROMPT = `${PIKU_PERSONA}
 
@@ -50,6 +52,7 @@ export function AgentScreen() {
   const [phase, setPhase]               = useState<PresenceState>('idle')
   const [liveThinking, setLiveThinking] = useState('')
   const [liveAnswer, setLiveAnswer]     = useState('')   // the reply, streaming in token-by-token
+  const [flow, setFlow]                 = useState<ReasoningFlow | null>(null)   // understand→plan for complex asks
   const [voiceOut, setVoiceOut]         = useState(true)
   const [projects, setProjects]         = useState<Project[]>([])
   const [editingTitle, setEditingTitle] = useState(false)
@@ -79,9 +82,12 @@ export function AgentScreen() {
     const history = agentHub.active()?.turns ?? []   // prior turns — Piku remembers this context
     agentHub.addTurn({ role: 'you', text: t })
     agentHub.setTrace([])
-    setLiveThinking(''); setLiveAnswer('')
+    setLiveThinking(''); setLiveAnswer(''); setFlow(null)
     setRunning(true); setPhase('thinking')
     try {
+      // Plan first: simple asks go straight to the answer; complex asks get understand→plan graphs.
+      const f = await planReasoning(t).catch(() => ({ simple: true }) as ReasoningFlow)
+      if (!f.simple) setFlow(f)
       const { reply, trace: tr } = await toolRouter.runWithTools(
         t, AGENT_SYSTEM_PROMPT,
         d => setLiveThinking(p => p + d),
@@ -267,17 +273,26 @@ export function AgentScreen() {
           </div>
         </Frame>
 
-        {/* ── THINKING & ACTIONS ── */}
-        <Frame className="col-span-12 lg:col-span-4" label="Thinking & Actions" accent="violet"
+        {/* ── REASONING FLOW: understand → plan → act (act = live thinking + trace) ── */}
+        <Frame className="col-span-12 lg:col-span-4" label={flow ? 'Reasoning Flow' : 'Thinking & Actions'} accent="violet"
           action={<span className={`w-1.5 h-1.5 rounded-full ${running ? 'bg-fuchsia-400 animate-pulse' : 'bg-white/25'}`} />}>
-          <div className="h-full overflow-y-auto px-5 py-4">
+          <div className="h-full overflow-y-auto px-5 py-4 flex flex-col gap-4">
+            {flow && (
+              <>
+                <FlowStage label="Understand" n="01"><UnderstandMap aspects={flow.understand ?? []} /></FlowStage>
+                <FlowStage label="Plan" n="02"><PlanSteps steps={flow.plan ?? []} /></FlowStage>
+                <div className="font-hud text-[9.5px] uppercase tracking-[0.2em] text-fuchsia-200/70 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 bg-fuchsia-400" style={{ boxShadow: '0 0 6px rgba(217,70,239,0.6)' }} />Act <span className="text-white/25">// 03</span>
+                </div>
+              </>
+            )}
             {running ? (
               <div className="flex flex-col gap-3">
                 <div className="border-l-2 border-fuchsia-400/30 pl-3 text-[12.5px] leading-relaxed text-fuchsia-100/55 italic whitespace-pre-wrap">{liveThinking || 'reasoning…'}</div>
                 <div ref={traceEnd} />
               </div>
             ) : trace.length === 0 ? (
-              <Hint>Piku's reasoning and the actions it takes appear here, live, as it works.</Hint>
+              !flow ? <Hint>Piku's reasoning and the actions it takes appear here, live, as it works.</Hint> : null
             ) : (
               <div className="flex flex-col gap-3">
                 {trace.map((s, i) => <TraceLine key={i} step={s} />)}
@@ -318,6 +333,63 @@ function Frame({ label, code, action, accent = 'cyan', className = '', children 
         </div>
         <div className="flex-1 min-h-0">{children}</div>
       </div>
+    </div>
+  )
+}
+
+function FlowStage({ label, n, children }: { label: string; n: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="font-hud text-[9.5px] uppercase tracking-[0.2em] text-fuchsia-200/70 mb-2.5 flex items-center gap-2">
+        <span className="w-1.5 h-1.5 bg-fuchsia-400" style={{ boxShadow: '0 0 6px rgba(217,70,239,0.6)' }} />{label} <span className="text-white/25">// {n}</span>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+// The problem broken into aspects — a left-hub mind-map (hub → aspect nodes), the cyberpunk graph look.
+function UnderstandMap({ aspects }: { aspects: string[] }) {
+  const items = aspects.length ? aspects : ['(no breakdown)']
+  const rowH = 24, h = Math.max(60, items.length * rowH + 16), cy = h / 2
+  return (
+    <svg viewBox={`0 0 360 ${h}`} className="w-full" style={{ height: h }}>
+      <defs>
+        <radialGradient id="uhub" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#a5f3fc" /><stop offset="100%" stopColor="#22D3EE" /></radialGradient>
+      </defs>
+      {items.map((a, i) => {
+        const y = 12 + i * rowH + 6
+        return (
+          <g key={i}>
+            <path d={`M 18 ${cy} C 64 ${cy}, 70 ${y}, 92 ${y}`} stroke="rgba(34,211,238,0.28)" fill="none" strokeWidth={1} />
+            <circle cx={92} cy={y} r={2.8} fill="#7DD3FC" />
+            <text x={102} y={y + 3.6} fill="rgba(214,232,255,0.82)" fontSize="11" fontFamily="ui-monospace, monospace">{a.length > 44 ? `${a.slice(0, 44)}…` : a}</text>
+          </g>
+        )
+      })}
+      <circle cx={18} cy={cy} r={6.5} fill="#22D3EE" opacity={0.22} />
+      <circle cx={18} cy={cy} r={3.6} fill="url(#uhub)" />
+    </svg>
+  )
+}
+
+// Ordered steps to resolve it — a numbered vertical flowchart with connectors.
+function PlanSteps({ steps }: { steps: string[] }) {
+  const items = steps.length ? steps : ['(no plan)']
+  return (
+    <div className="flex flex-col">
+      {items.map((s, i) => (
+        <div key={i} className="flex items-stretch gap-2.5">
+          <div className="flex flex-col items-center">
+            <span className="font-hud text-[8.5px] w-5 h-5 flex items-center justify-center text-cyan-200 shrink-0"
+              style={{ clipPath: 'polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px))', boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.35)' }}>
+              {String(i + 1).padStart(2, '0')}
+            </span>
+            {i < items.length - 1 && <span className="w-px flex-1 min-h-2.5 bg-cyan-400/25 my-1" />}
+          </div>
+          <span className="text-[12px] text-white/80 leading-snug pt-0.5 pb-2">{s}</span>
+        </div>
+      ))}
     </div>
   )
 }

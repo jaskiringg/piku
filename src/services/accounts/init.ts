@@ -1,13 +1,27 @@
 import { accountService } from './AccountService'
 
+// Seed the user's GitHub accounts on boot. Tokens come from .env.local (VITE_GH_*), which is
+// gitignored — they never enter the repo. This upserts: it creates the account if missing AND
+// backfills the token/username onto an account that was previously seeded empty, so connecting is
+// idempotent. The agent's github tools match by label 'personal' / 'office'.
+const SEEDS: { label: string; username: string; token?: string }[] = [
+  { label: 'Personal', username: 'jaskiring',      token: import.meta.env.VITE_GH_PERSONAL_TOKEN },
+  { label: 'Office',   username: 'jaskirat-dev01', token: import.meta.env.VITE_GH_OFFICE_TOKEN },
+]
+
 export async function seedAccounts(): Promise<void> {
   const existing = await accountService.getByService('github')
-  const existingLabels = new Set(existing.map(a => a.label.toLowerCase()))
-
-  if (!existingLabels.has('personal')) {
-    await accountService.create('github', 'Personal', '', { username: 'jaskiring' })
-  }
-  if (!existingLabels.has('office')) {
-    await accountService.create('github', 'Office', '', { username: 'jaskirat-dev1' })
+  for (const seed of SEEDS) {
+    const current = existing.find(a => a.label.toLowerCase() === seed.label.toLowerCase())
+    if (!current) {
+      await accountService.create('github', seed.label, seed.token ?? '', { username: seed.username })
+      continue
+    }
+    // backfill token / fix username on an already-seeded account (idempotent connect)
+    const needsToken = !!seed.token && current.token !== seed.token
+    const needsName  = current.username !== seed.username
+    if (needsToken || needsName) {
+      await accountService.save({ ...current, token: seed.token ?? current.token, username: seed.username })
+    }
   }
 }
