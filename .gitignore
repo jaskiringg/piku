@@ -13,6 +13,11 @@ src-tauri/target/
 # Local agent / editor config
 .claude/
 
+# Secrets — local env (tokens etc.), never commit
+.env
+.env.local
+.env.*.local
+
 # Personal & runtime data (not source code)
 piku-vault/
 memory/

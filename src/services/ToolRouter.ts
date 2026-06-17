@@ -287,8 +287,10 @@ class ToolRouter {
     if (first.thinking) trace.push({ kind: 'thinking', text: first.thinking })
 
     if (!first.toolCalls.length) {
-      trace.push({ kind: 'answer', text: first.content })
-      return { reply: first.content, usedTools: [], trace }
+      let reply = first.content.trim()
+      if (!reply) reply = await this.answerDirectly(messages, onContent)   // reasoning ate the budget → answer plainly
+      trace.push({ kind: 'answer', text: reply })
+      return { reply, usedTools: [], trace }
     }
 
     messages.push({ role: 'assistant', content: first.content, tool_calls: first.toolCalls })
@@ -330,9 +332,19 @@ class ToolRouter {
     // A tool needs interpretation (e.g. recall_memory) → let the model compose the reply (streamed).
     const second = await ollamaService.chatToolRoundStream(messages, this.tools, onThinking, onContent)
     if (second.thinking) trace.push({ kind: 'thinking', text: second.thinking })
-    const reply = second.content || readyOutputs.join('  ')
+    let reply = second.content.trim()
+    if (!reply) reply = await this.answerDirectly(messages, onContent)
+    reply = reply || readyOutputs.join('  ')
     trace.push({ kind: 'answer', text: reply })
     return { reply, usedTools, trace }
+  }
+
+  // Reliable-output fallback: qwen3 sometimes spends its whole token budget "thinking" and emits
+  // no content. When that happens we re-ask with think:false (no tools) so it answers directly —
+  // streamed through onContent so it still types in live.
+  private async answerDirectly(messages: OllamaChatMessage[], onContent?: (delta: string) => void): Promise<string> {
+    const fb = await ollamaService.chatToolRoundStream(messages, [], undefined, onContent, 0.5, undefined, false)
+    return fb.content.trim()
   }
 }
 
