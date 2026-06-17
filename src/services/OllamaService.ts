@@ -255,6 +255,7 @@ class OllamaService {
     messages:    OllamaChatMessage[],
     tools:       OllamaTool[],
     onThinking?: (delta: string) => void,
+    onContent?:  (delta: string) => void,
     temperature = 0.4,
     timeoutMs   = CHAT_TIMEOUT,
   ): Promise<{ content: string; thinking: string; toolCalls: OllamaToolCall[] }> {
@@ -288,7 +289,7 @@ class OllamaService {
             const msg = (JSON.parse(line) as { message?: { content?: string; thinking?: string; tool_calls?: OllamaToolCall[] } }).message
             if (!msg) continue
             if (msg.thinking) { thinking += msg.thinking; onThinking?.(msg.thinking) }
-            if (msg.content)  { content += msg.content }
+            if (msg.content)  { content += msg.content; onContent?.(msg.content) }
             if (msg.tool_calls && msg.tool_calls.length) toolCalls = msg.tool_calls
           } catch { /* malformed NDJSON line — skip */ }
         }

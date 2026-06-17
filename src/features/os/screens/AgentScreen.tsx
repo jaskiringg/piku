@@ -49,6 +49,7 @@ export function AgentScreen() {
   const [running, setRunning]           = useState(false)
   const [phase, setPhase]               = useState<PresenceState>('idle')
   const [liveThinking, setLiveThinking] = useState('')
+  const [liveAnswer, setLiveAnswer]     = useState('')   // the reply, streaming in token-by-token
   const [voiceOut, setVoiceOut]         = useState(true)
   const [projects, setProjects]         = useState<Project[]>([])
   const [editingTitle, setEditingTitle] = useState(false)
@@ -63,7 +64,7 @@ export function AgentScreen() {
 
   const loadProjects = () => { void projectService.getAllProjects().then(setProjects).catch(() => {}) }
   useEffect(loadProjects, [])
-  useEffect(() => { convEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [turns.length, ctx?.id])
+  useEffect(() => { convEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [turns.length, ctx?.id, liveAnswer])
   useEffect(() => { traceEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [trace, liveThinking, running])
   useEffect(() => { if (!running) inputRef.current?.focus() }, [running, ctx?.id])
 
@@ -78,16 +79,21 @@ export function AgentScreen() {
     const history = agentHub.active()?.turns ?? []   // prior turns — Piku remembers this context
     agentHub.addTurn({ role: 'you', text: t })
     agentHub.setTrace([])
-    setLiveThinking('')
+    setLiveThinking(''); setLiveAnswer('')
     setRunning(true); setPhase('thinking')
     try {
-      const { reply, trace: tr } = await toolRouter.runWithTools(t, AGENT_SYSTEM_PROMPT, d => setLiveThinking(p => p + d), history)
+      const { reply, trace: tr } = await toolRouter.runWithTools(
+        t, AGENT_SYSTEM_PROMPT,
+        d => setLiveThinking(p => p + d),
+        d => { setPhase('listening'); setLiveAnswer(p => p + d) },   // answer streams live → no dead gap
+        history,
+      )
       agentHub.setTrace(tr)
       agentHub.addTurn({ role: 'piku', text: reply || '(done)' })
       if (voiceOut) voiceService.speak(reply)
     } catch (e) {
       agentHub.addTurn({ role: 'piku', text: `Something went wrong: ${String(e)}` })
-    } finally { setRunning(false); setPhase('idle'); setLiveThinking('') }
+    } finally { setRunning(false); setPhase('idle'); setLiveThinking(''); setLiveAnswer('') }
   }
 
   const onInputChange = (v: string) => {
@@ -228,6 +234,11 @@ export function AgentScreen() {
                         style={t.role === 'you' ? { clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))', boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.18)' } : undefined}>{t.text}</div>
                     </div>
                   ))}
+                  {/* live reply — streams in token-by-token so there's no dead loading gap */}
+                  {running && (liveAnswer
+                    ? <div className="flex justify-start"><div className="max-w-[85%] text-[14px] leading-relaxed text-white/85 whitespace-pre-wrap">{liveAnswer}<span className="animate-blink text-cyan-300 ml-0.5">▋</span></div></div>
+                    : <div className="flex justify-start"><div className="flex items-center gap-1 text-cyan-300/60 px-1"><span className="w-1.5 h-1.5 rounded-full bg-cyan-400/70 animate-pulse" /><span className="w-1.5 h-1.5 rounded-full bg-cyan-400/50 animate-pulse [animation-delay:150ms]" /><span className="w-1.5 h-1.5 rounded-full bg-cyan-400/40 animate-pulse [animation-delay:300ms]" /></div></div>
+                  )}
                   <div ref={convEnd} />
                 </div>
               )}

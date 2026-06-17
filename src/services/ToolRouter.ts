@@ -272,6 +272,7 @@ class ToolRouter {
     userMessage: string,
     systemPrefix: string,
     onThinking?: (delta: string) => void,
+    onContent?: (delta: string) => void,
     history: { role: 'you' | 'piku'; text: string }[] = [],
   ): Promise<AgentRun> {
     const trace: TraceStep[] = []
@@ -282,7 +283,7 @@ class ToolRouter {
       { role: 'user', content: userMessage },
     ]
 
-    const first = await ollamaService.chatToolRoundStream(messages, this.tools, onThinking)
+    const first = await ollamaService.chatToolRoundStream(messages, this.tools, onThinking, onContent)
     if (first.thinking) trace.push({ kind: 'thinking', text: first.thinking })
 
     if (!first.toolCalls.length) {
@@ -326,8 +327,8 @@ class ToolRouter {
       return { reply, usedTools, trace }
     }
 
-    // A tool needs interpretation (e.g. recall_memory) → let the model compose the reply.
-    const second = await ollamaService.chatToolRoundStream(messages, this.tools, onThinking)
+    // A tool needs interpretation (e.g. recall_memory) → let the model compose the reply (streamed).
+    const second = await ollamaService.chatToolRoundStream(messages, this.tools, onThinking, onContent)
     if (second.thinking) trace.push({ kind: 'thinking', text: second.thinking })
     const reply = second.content || readyOutputs.join('  ')
     trace.push({ kind: 'answer', text: reply })
