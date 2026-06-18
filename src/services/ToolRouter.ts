@@ -311,27 +311,35 @@ const TOOLS: Record<string, ToolDef> = {
       type: 'function',
       function: {
         name: 'gmail_check',
-        description: "Check the user's Gmail. Use for 'any important email', 'unread mail today', 'emails from X', 'what's in my inbox'. Pass a Gmail search query.",
+        description: "Check the user's Gmail across all connected accounts. Use for 'any important email', 'unread mail today', 'emails from X'. Optionally target one account by label/email keyword (e.g. 'work', 'personal').",
         parameters: {
           type: 'object',
           properties: {
-            query: { type: 'string', description: "Gmail search, e.g. 'is:unread newer_than:1d', 'is:important newer_than:2d', 'from:alice'" },
+            query:   { type: 'string', description: "Gmail search, e.g. 'is:unread newer_than:1d', 'is:important newer_than:2d', 'from:alice'" },
+            account: { type: 'string', description: "Optional: which account — a label or email keyword like 'work' or 'personal'. Omit to check all." },
           },
           required: [],
         },
       },
     },
     run: async (args) => {
-      const accounts = (await accountService.getByService('email')).filter(a => a.enabled)
-      if (!accounts.length) return 'No Gmail connected yet — go to Settings → Gmail and connect.'
+      const all = (await accountService.getByService('email')).filter(a => a.enabled && a.token)
+      if (!all.length) return 'No Gmail connected yet — go to Settings → Gmail and connect.'
+      const sel = String(args.account ?? '').trim().toLowerCase()
+      const matched = sel ? all.filter(a => a.label.toLowerCase().includes(sel) || (a.email ?? '').toLowerCase().includes(sel)) : []
+      const targets = matched.length ? matched : all
       const q = String(args.query ?? '').trim() || 'is:unread newer_than:1d'
-      const acc = accounts[0]
-      try {
-        const mail = await gmailConnector.search(acc, q, 12)
-        if (!mail.length) return `No emails match "${q}".`
-        return `Gmail (${acc.email ?? acc.label}) for "${q}":\n` +
-          mail.map(m => `• ${m.unread ? '[unread] ' : ''}${m.from.replace(/<.*>/, '').trim()} — ${m.subject}: ${m.snippet.slice(0, 90)}`).join('\n')
-      } catch (e) { return `Couldn't read Gmail: ${String(e)}` }
+      const blocks: string[] = []
+      for (const acc of targets) {
+        const who = acc.email ?? acc.label
+        try {
+          const mail = await gmailConnector.search(acc, q, 8)
+          blocks.push(mail.length
+            ? `${who} (${acc.label}):\n` + mail.map(m => `• ${m.unread ? '[unread] ' : ''}${m.from.replace(/<.*>/, '').trim()} — ${m.subject}: ${m.snippet.slice(0, 90)}`).join('\n')
+            : `${who} (${acc.label}): nothing matches "${q}".`)
+        } catch (e) { blocks.push(`${who}: couldn't read (${String(e)})`) }
+      }
+      return `Gmail for "${q}":\n\n` + blocks.join('\n\n')
     },
   },
 }
