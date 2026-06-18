@@ -257,6 +257,53 @@ const TOOLS: Record<string, ToolDef> = {
       } catch (e) { return `Failed to fetch activity: ${String(e)}` }
     },
   },
+
+  github_commits_today: {
+    needsLlmRound: true,
+    spec: {
+      type: 'function',
+      function: {
+        name: 'github_commits_today',
+        description: "Summarize the commits the user pushed TODAY (and which repos), across their GitHub accounts including private repos. Use for 'what did I commit today', 'what did I ship', 'my commits today / this week'.",
+        parameters: {
+          type: 'object',
+          properties: {
+            account: { type: 'string', enum: ['personal', 'office', 'all'], description: "Which account; 'all' (default) covers both" },
+          },
+          required: [],
+        },
+      },
+    },
+    run: async (args) => {
+      const which = String(args.account ?? 'all').trim().toLowerCase()
+      const all = (await accountService.getByService('github')).filter(a => a.enabled && a.token)
+      if (!all.length) return 'No connected GitHub account with a token yet — add one in Settings → GitHub.'
+      const targets = which === 'all' ? all : all.filter(a => a.label.toLowerCase() === which)
+      if (!targets.length) return `No "${which}" GitHub account connected.`
+      const fmt = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+      const tally = async (since: string) => {
+        let total = 0; const byRepo: Record<string, number> = {}; const failed: string[] = []
+        for (const acc of targets) {
+          const r = await gitHubConnector.commitsSince(acc, since)
+          if (!r) { failed.push(acc.label); continue }
+          total += r.total
+          for (const [repo, n] of Object.entries(r.byRepo)) byRepo[repo] = (byRepo[repo] ?? 0) + n
+        }
+        return { total, byRepo, failed }
+      }
+      const today = await tally(fmt(new Date()))
+      const fmtRepos = (m: Record<string, number>, max = 8) =>
+        Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, max).map(([r, n]) => `${r} (${n})`).join(', ')
+      if (today.total > 0) {
+        return `Today you pushed ${today.total} commit${today.total === 1 ? '' : 's'} across ${Object.keys(today.byRepo).length} repo(s): ${fmtRepos(today.byRepo)}.`
+          + (today.failed.length ? ` (couldn't reach: ${today.failed.join(', ')})` : '')
+      }
+      const week = await tally(fmt(new Date(Date.now() - 7 * 864e5)))
+      return week.total > 0
+        ? `No commits pushed yet today. In the last 7 days: ${week.total} commits across ${Object.keys(week.byRepo).length} repo(s) — top: ${fmtRepos(week.byRepo, 6)}.`
+        : `No commits today, and none in the last 7 days across ${targets.map(t => t.label).join(' & ')}.`
+    },
+  },
 }
 
 export interface TraceStep { kind: 'thinking' | 'tool' | 'result' | 'answer'; text: string }
