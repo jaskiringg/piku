@@ -339,15 +339,23 @@ function GmailCard() {
   const [accounts, setAccounts] = useState<ServiceAccount[]>([])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [label, setLabel] = useState('')
   const load = () => { void accountService.getByService('email').then(setAccounts) }
   useEffect(() => { load() }, [])
   const connect = async () => {
     setErr(''); setBusy(true)
     try {
       const t = await connectGoogle()
-      const acc = await accountService.create('email', 'Gmail', t.accessToken, { email: t.email })
-      await accountService.save({ ...acc, refreshToken: t.refreshToken, tokenExpiresAt: t.expiresAt })
-      load()
+      const lbl = label.trim() || (t.email ? t.email.split('@')[0] : 'Gmail')
+      // upsert by email so reconnecting the same account updates instead of duplicating
+      const existing = (await accountService.getByService('email')).find(a => a.email && t.email && a.email.toLowerCase() === t.email.toLowerCase())
+      if (existing) {
+        await accountService.save({ ...existing, label: lbl, token: t.accessToken, refreshToken: t.refreshToken ?? existing.refreshToken, tokenExpiresAt: t.expiresAt })
+      } else {
+        const acc = await accountService.create('email', lbl, t.accessToken, { email: t.email })
+        await accountService.save({ ...acc, refreshToken: t.refreshToken, tokenExpiresAt: t.expiresAt })
+      }
+      setLabel(''); load()
     } catch (e) { setErr(String(e instanceof Error ? e.message : e)) } finally { setBusy(false) }
   }
   return (
@@ -356,12 +364,21 @@ function GmailCard() {
         ? <p className="text-xs text-white/25 py-2">No Gmail connected.</p>
         : accounts.map(a => (
             <div key={a.id} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
-              <span className="text-sm text-white/80 flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />{a.email ?? a.label}</span>
-              <button onClick={() => void accountService.delete(a.id).then(load)} className="font-hud text-[10px] text-white/25 hover:text-red-300">remove</button>
+              <span className="text-sm text-white/80 flex items-center gap-2 min-w-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                <span className="font-hud text-[10px] uppercase tracking-wider text-cyan-300/60">{a.label}</span>
+                <span className="truncate text-white/60">{a.email}</span>
+              </span>
+              <button onClick={() => void accountService.delete(a.id).then(load)} className="font-hud text-[10px] text-white/25 hover:text-red-300 shrink-0">remove</button>
             </div>
           ))}
       {googleConfigured()
-        ? <button onClick={connect} disabled={busy} className="font-hud text-[10px] text-cyan-300/70 hover:text-cyan-200 border border-cyan-400/20 px-3 py-1.5 mt-2 transition-colors disabled:opacity-40">{busy ? 'connecting…' : '+ Connect Gmail'}</button>
+        ? (
+          <div className="flex items-center gap-2 mt-2">
+            <input value={label} onChange={e => setLabel(e.target.value)} placeholder="label (e.g. Work)" className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/70 placeholder:text-white/20 outline-none font-hud" />
+            <button onClick={connect} disabled={busy} className="font-hud text-[10px] text-cyan-300/70 hover:text-cyan-200 border border-cyan-400/20 px-3 py-1.5 transition-colors disabled:opacity-40 shrink-0">{busy ? 'connecting…' : '+ Connect Gmail'}</button>
+          </div>
+        )
         : <p className="font-hud text-[10px] text-amber-300/70 mt-2 leading-relaxed">Set VITE_GOOGLE_CLIENT_ID / _SECRET in .env.local (Google Cloud → OAuth client → Desktop app) to enable.</p>}
       {err && <p className="text-[10px] text-red-400/70 mt-1.5 break-words">{err}</p>}
     </Card>
