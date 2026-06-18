@@ -47,6 +47,26 @@ export class GitHubConnector {
     return (await get<GitHubEvent[]>(`https://api.github.com/users/${username}/events?per_page=10`, account.token)) ?? []
   }
 
+  // Commits authored by this account since a date (YYYY-MM-DD), including private repos the token
+  // can read. Uses the Search Commits API — total is exact; the per-repo breakdown is from the
+  // first page (up to 100). Returns null on auth/transport failure so callers can distinguish.
+  async commitsSince(account: ServiceAccount, sinceISO: string): Promise<{ total: number; byRepo: Record<string, number> } | null> {
+    const username = account.username ?? (await this.getUser(account))?.login
+    if (!username) return null
+    const q = encodeURIComponent(`author:${username} committer-date:>=${sinceISO}`)
+    const data = await get<{ total_count: number; items: { repository?: { full_name: string } }[] }>(
+      `https://api.github.com/search/commits?q=${q}&per_page=100&sort=committer-date&order=desc`,
+      account.token,
+    )
+    if (!data) return null
+    const byRepo: Record<string, number> = {}
+    for (const it of data.items ?? []) {
+      const name = it.repository?.full_name
+      if (name) byRepo[name] = (byRepo[name] ?? 0) + 1
+    }
+    return { total: data.total_count ?? 0, byRepo }
+  }
+
   async getRepoDetails(account: ServiceAccount, repo: string): Promise<GitHubRepo | null> {
     const username = account.username ?? (await this.getUser(account))?.login
     if (!username) return null
