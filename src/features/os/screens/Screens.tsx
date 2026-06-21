@@ -4,6 +4,7 @@ import { Card } from '../Card'
 import type { NavKey } from '../Sidebar'
 import { ScreenShell, BuildStatus, Hint } from './ScreenShell'
 import { projectService } from '../../projects/components/ProjectDashboard'
+import { ollamaService, ACTIVE_BRAIN } from '../../../services/OllamaService'
 import { AgentScreen } from './AgentScreen'
 import { CanvasScreen } from './Canvas'
 import { PlaygroundScreen } from './Playground'
@@ -16,37 +17,110 @@ const Pill = ({ children, tone = 'idle' }: { children: ReactNode; tone?: 'run' |
 )
 
 /* ───────────────────────── Models ───────────────────────── */
+
+const SectionLabel = ({ children }: { children: ReactNode }) => (
+  <div className="col-span-12 font-hud text-[10px] uppercase tracking-[0.22em] text-white/35 mt-3 mb-0.5 first:mt-0">{children}</div>
+)
+
+// Known local-model blurbs; anything else discovered via listModels() falls back to a generic
+// descriptor, so freshly-pulled models still show up.
+const KNOWN_MODELS: Record<string, { kind: string; note: string; glyph: string }> = {
+  'qwen3:4b':         { kind: 'Chat · default',         note: 'Streaming + live thinking',  glyph: '◈' },
+  'qwen3:14b':        { kind: 'Chat · heavy reasoning', note: 'Swaps in for hard tasks',     glyph: '◈' },
+  'nomic-embed-text': { kind: 'Embeddings · 137M',      note: 'Memory & retrieval vectors',  glyph: '≈' },
+}
+function modelMeta(name: string) {
+  return KNOWN_MODELS[name]
+    ?? KNOWN_MODELS[name.split(':')[0]]
+    ?? { kind: /embed/i.test(name) ? 'Embeddings' : 'Chat · local', note: 'Local Ollama model', glyph: '◈' }
+}
+
+// External assistants Piku can hand off to — launched through the existing open_app / open_in_app
+// Rust commands. Desktop apps fall back to their web app in Chrome if not installed.
+interface Assistant { key: string; name: string; kind: string; note: string; glyph: string; app?: string; fallbackApp?: string; web?: string }
+const ASSISTANTS: Assistant[] = [
+  { key: 'chatgpt',  name: 'ChatGPT',  kind: 'OpenAI · app',      note: 'GPT-4o / o-series — opens the desktop app',                       glyph: '✦', app: 'ChatGPT',  web: 'https://chatgpt.com' },
+  { key: 'claude',   name: 'Claude',   kind: 'Anthropic · app',   note: 'Opus / Sonnet — opens the desktop app',                           glyph: '✶', app: 'Claude',   web: 'https://claude.ai' },
+  { key: 'gemini',   name: 'Gemini',   kind: 'Google · web',      note: '2.5 Pro / Flash — opens in Chrome',                               glyph: '✧', web: 'https://gemini.google.com/app' },
+  { key: 'opencode', name: 'opencode', kind: 'CLI · free models', note: 'Free models (Grok, GLM, Qwen, DeepSeek) — opens the app or Terminal', glyph: '⌘', app: 'opencode', fallbackApp: 'Terminal' },
+]
+
+async function launchAssistant(a: Assistant): Promise<void> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    if (a.app) {
+      try { await invoke('open_app', { name: a.app }); return }
+      catch { /* not installed → try the fallbacks */ }
+    }
+    if (a.fallbackApp) {
+      try { await invoke('open_app', { name: a.fallbackApp }); return }
+      catch { /* fall through to web */ }
+    }
+    if (a.web) await invoke('open_in_app', { app: 'Google Chrome', target: a.web })
+  } catch { /* not running inside the desktop app */ }
+}
+
 export function ModelsScreen() {
-  const models = [
-    { name: 'qwen3:4b',         kind: 'Chat · default',          status: 'Running', note: 'Streaming + live thinking', glyph: '◈' },
-    { name: 'qwen3:14b',        kind: 'Chat · heavy reasoning',  status: 'Idle',    note: 'Swaps in for hard tasks',  glyph: '◈' },
-    { name: 'nomic-embed-text', kind: 'Embeddings · 137M',       status: 'Idle',    note: 'Memory & retrieval vectors', glyph: '≈' },
-  ]
+  const [localModels, setLocalModels] = useState<string[]>(Object.keys(KNOWN_MODELS))
+  useEffect(() => {
+    void ollamaService.listModels().then(names => { if (names.length) setLocalModels(names) }).catch(() => {})
+  }, [])
+  const defaultModel = ACTIVE_BRAIN.model
+
   return (
-    <ScreenShell title="Models" subtitle="Local inference today; capability-based routing tomorrow." action={<AddBtn label="+ Pull model" />}>
+    <ScreenShell title="Models" subtitle="Local inference on-device — plus one-tap handoff to the big assistants." action={<AddBtn label="+ Pull model" />}>
       <div className="grid grid-cols-12 gap-4">
-        {models.map(m => (
-          <Card key={m.name} className="col-span-12 md:col-span-4">
-            <div className="flex items-center gap-2.5 mb-2">
-              <span className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-400/15 flex items-center justify-center text-cyan-300/80">{m.glyph}</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm text-white/90 truncate">{m.name}</div>
-                <div className="text-[10px] text-white/35">{m.kind}</div>
+
+        {/* ── Local, on-device ── */}
+        <SectionLabel>Local · on-device · private</SectionLabel>
+        {localModels.map(name => {
+          const m = modelMeta(name)
+          const running = name === defaultModel
+          return (
+            <Card key={name} className="col-span-12 md:col-span-4">
+              <div className="flex items-center gap-2.5 mb-2">
+                <span className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-400/15 flex items-center justify-center text-cyan-300/80">{m.glyph}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-white/90 truncate">{name}</div>
+                  <div className="text-[10px] text-white/35">{m.kind}</div>
+                </div>
+                <Pill tone={running ? 'run' : 'idle'}>{running ? 'Running' : 'Idle'}</Pill>
               </div>
-              <Pill tone={m.status === 'Running' ? 'run' : 'idle'}>{m.status}</Pill>
+              <Hint>{m.note}</Hint>
+            </Card>
+          )
+        })}
+
+        {/* ── External assistants — launch & hand off ── */}
+        <SectionLabel>Assistants · launch &amp; hand off</SectionLabel>
+        {ASSISTANTS.map(a => (
+          <Card key={a.key} className="col-span-12 md:col-span-6 lg:col-span-3">
+            <div className="flex items-center gap-2.5 mb-2">
+              <span className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-400/15 flex items-center justify-center text-cyan-300/80">{a.glyph}</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-white/90 truncate">{a.name}</div>
+                <div className="text-[10px] text-white/35">{a.kind}</div>
+              </div>
             </div>
-            <Hint>{m.note}</Hint>
+            <Hint>{a.note}</Hint>
+            <button onClick={() => void launchAssistant(a)}
+              className="mt-3 w-full text-[11px] uppercase tracking-[0.15em] text-cyan-100 bg-cyan-500/12 hover:bg-cyan-500/22 border border-cyan-400/20 rounded-lg py-2 transition-colors">
+              Open →
+            </button>
           </Card>
         ))}
-        <Card title="Routing" className="col-span-12">
+
+        {/* ── Routing ── */}
+        <SectionLabel>Routing</SectionLabel>
+        <Card className="col-span-12">
           <div className="flex flex-col sm:flex-row gap-3 text-xs">
             <div className="flex-1 rounded-xl bg-cyan-500/[0.06] border border-cyan-400/15 p-3">
-              <div className="text-cyan-300/80 mb-1">Now — local only</div>
-              <Hint>Every request goes through <span className="text-white/70">OllamaService</span>, hardcoded to qwen3. No network, no key.</Hint>
+              <div className="text-cyan-300/80 mb-1">Now — local + manual handoff</div>
+              <Hint>Local Ollama answers everything through <span className="text-white/70">OllamaService</span> — no network, no key. For the heavy stuff, open an assistant above; nothing leaves the machine unless you do.</Hint>
             </div>
             <div className="flex-1 rounded-xl bg-cyan-400/[0.05] border border-cyan-300/20 p-3">
               <div className="text-cyan-200/80 mb-1">Next — ProviderRegistry</div>
-              <Hint>Route by capability: local Ollama for most, escalate hard tasks to Claude via the <span className="text-white/70">claude CLI</span> (K2: never an API key).</Hint>
+              <Hint>Automatic capability routing: local Ollama for most, escalate hard tasks to Claude via the <span className="text-white/70">claude CLI</span> (K2: never an API key).</Hint>
             </div>
           </div>
         </Card>
@@ -54,7 +128,8 @@ export function ModelsScreen() {
       <BuildStatus items={[
         { label: 'OllamaService — local, streaming', state: 'built' },
         { label: 'Embeddings → IndexedDB', state: 'built' },
-        { label: 'ProviderRegistry / capability routing', state: 'planned' },
+        { label: 'Launch assistants — ChatGPT / Claude / Gemini / opencode', state: 'built' },
+        { label: 'ProviderRegistry — automatic capability routing', state: 'planned' },
         { label: 'Claude-CLI Tier-2 escalation', state: 'planned' },
       ]} />
     </ScreenShell>
