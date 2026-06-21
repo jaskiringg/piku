@@ -8,6 +8,7 @@ import { graphService }                  from '../../graph'
 import { ollamaService }                 from '../../../services/OllamaService'
 import { toolRouter }                    from '../../../services/ToolRouter'
 import { classifyIntent }                from '../../../services/ReasoningPlanner'
+import { detectMode, assembleMode, handoffToExternal } from '../../../services/modes/Modes'
 import { opencodeProvider }              from '../../../services/OpencodeProvider'
 import { agentHub }                      from '../../os/screens/agentSession'
 import { logger }                        from '../../../lib/logger'
@@ -101,88 +102,74 @@ export function useChat({ addMessage, setPresenceState, setInputText, updateLast
       if (summaryContext)    parts.push(summaryContext)
       const systemContent = parts.join('\n\n')
 
-      // ── Step 3: Route the turn, then call the LLM ────────────────────────
-      // Deterministic intent (zero LLM cost): chores fire a tool immediately, complex asks reason
-      // (think=true), simple chat just replies. Same routing as the Agent screen — one behavior.
-      const intent = classifyIntent(trimmed)
-      // tool chores → local ToolRouter (fast, Piku's own tools). Conversation + reasoning (simple
-      // or complex) → the opencode brain (falls back to local Ollama). think only matters for the
-      // local tool path now.
-      const needsTools = intent.kind === 'tool'
-      const think      = intent.kind === 'complex'
+      // ── Step 3: Mode → route → call the brain/tools ──────────────────────
+      // Modes (/execute · "project mode" · …) are sticky on the shared session and decide HOW Piku
+      // approaches the turn. The provider just executes the assembled prompt (model-independent).
+      const det  = detectMode(trimmed)
+      if (det.mode) agentHub.setMode(det.mode)
+      const mode = agentHub.active()?.mode ?? 'auto'
+      const msg  = det.cleaned || trimmed
 
       addMessage('piku', '')  // streaming placeholder — empty, not persisted
       streamingPlaceholderAdded = true
 
-      let response = ''
-      if (needsTools) {
-        // ── Tool path: route through ToolRouter ─────────────────────────────
-        // chatToolRoundStream emits DELTAS → accumulate locally (updateLast* replace in place).
-        const toolSystem = systemContent + '\n\n' + TOOLS_AWARE_SUFFIX
+      // Reusable paths. tool = local ToolRouter (Piku's Mac tools). brain = opencode (free, capable)
+      // with local Ollama fallback. Both stream reasoning → thinking, answer → message.
+      const toolPath = async (system: string, think: boolean): Promise<string> => {
         let acc = '', thinkAcc = ''
         const { reply } = await toolRouter.runWithTools(
-          trimmed, toolSystem,
-          (delta) => { thinkAcc += delta; updateLastPikuThinking(thinkAcc) },
-          (delta) => { acc += delta; updateLastPikuMessage(acc) },
-          sessionHistory,   // prior turns in this session → Piku remembers the conversation
-          think,
-          (label) => { setPresenceState('acting'); updateLastPikuThinking(label) },   // orb acts; "Checking Gmail…" surfaces
+          msg, system,
+          (d) => { thinkAcc += d; updateLastPikuThinking(thinkAcc) },
+          (d) => { acc += d; updateLastPikuMessage(acc) },
+          sessionHistory, think,
+          (label) => { setPresenceState('acting'); updateLastPikuThinking(label) },
         )
-        response = reply || '(done)'
-        logger.chat('tool response', { chars: response.length, kind: intent.kind })
-      } else {
-        // ── Brain path: opencode (free, capable) first; local Ollama as fallback ───────────
-        let done = false
+        return reply || '(done)'
+      }
+      const brainPath = async (system: string): Promise<string> => {
         if (opencodeBrain) {
           try {
             if (await opencodeProvider.ensureServer()) {
               setPresenceState('thinking')
-              const reply = await opencodeProvider.chat(
-                systemContent, trimmed, sessionHistory,
-                (thinkText) => updateLastPikuThinking(thinkText),
-              )
-              if (reply) {
-                updateLastPikuMessage(reply)
-                response = reply
-                done = true
-                logger.chat('opencode reply', { chars: reply.length, model: 'opencode' })
-              }
-            } else {
-              logger.warn('opencode unreachable — using local Ollama')
-            }
-          } catch (e) {
-            logger.error('opencode brain failed — falling back to Ollama', { error: String(e) })
-          }
+              const reply = await opencodeProvider.chat(system, msg, sessionHistory, (t) => updateLastPikuThinking(t))
+              if (reply) { updateLastPikuMessage(reply); logger.chat('opencode reply', { chars: reply.length }); return reply }
+            } else logger.warn('opencode unreachable — using local Ollama')
+          } catch (e) { logger.error('opencode brain failed — falling back to Ollama', { error: String(e) }) }
         }
-        if (!done) {
-          // ── Local fallback: Ollama streaming ──
-          let streamAccumulated   = ''
-          let thinkingAccumulated = ''
-          const priorMsgs = sessionHistory.slice(-10).map(t => ({
-            role: (t.role === 'you' ? 'user' : 'assistant') as 'user' | 'assistant',
-            content: t.text,
-          }))
-          const result = await ollamaService.chatStream(
-            [
-              { role: 'system', content: systemContent },
-              ...priorMsgs,
-              { role: 'user',   content: trimmed        },
-            ],
-            (chunk) => {
-              streamAccumulated += chunk
-              updateLastPikuMessage(streamAccumulated)
-            },
-            (thinkChunk) => {
-              thinkingAccumulated += thinkChunk
-              updateLastPikuThinking(thinkChunk)
-            },
-          )
-          response = result.response
-          logger.chat('response', { chars: result.response.length, latencyMs: result.latencyMs })
+        let streamAcc = '', thinkAcc = ''
+        const priorMsgs = sessionHistory.slice(-10).map(t => ({
+          role: (t.role === 'you' ? 'user' : 'assistant') as 'user' | 'assistant', content: t.text,
+        }))
+        const result = await ollamaService.chatStream(
+          [{ role: 'system', content: system }, ...priorMsgs, { role: 'user', content: msg }],
+          (c) => { streamAcc += c; updateLastPikuMessage(streamAcc) },
+          (tc) => { thinkAcc += tc; updateLastPikuThinking(thinkAcc) },
+        )
+        return result.response
+      }
+
+      let response = ''
+      if (mode === 'auto') {
+        // Auto: tool chores → ToolRouter; conversation/reasoning → opencode brain.
+        const intent = classifyIntent(msg)
+        if (intent.kind === 'tool') response = await toolPath(systemContent + '\n\n' + TOOLS_AWARE_SUFFIX, false)
+        else                        response = await brainPath(systemContent)
+      } else {
+        const projectId = agentHub.active()?.projectId
+        const linkedProject = projectId ? await projectService.getProject(projectId).catch(() => null) : null
+        const asm = await assembleMode(mode, { message: msg, linkedProject })
+        if (asm.handoff) {
+          await handoffToExternal(asm.handoff, msg)
+          response = `Opened ${asm.handoff.name} and copied your prompt to the clipboard — paste it there to continue.`
+          updateLastPikuMessage(response)
+        } else if (asm.useTools) {
+          response = await toolPath(systemContent + '\n\n' + TOOLS_AWARE_SUFFIX + '\n\n' + asm.systemAddon, false)
+        } else {
+          response = await brainPath(systemContent + '\n\n' + asm.systemAddon)
         }
       }
       updateLastPikuMessage(response)  // final clean version
-      logger.chat('response', { chars: response.length })
+      logger.chat('response', { chars: response.length, mode })
       agentHub.addTurn({ role: 'piku', text: response })   // persist the reply into the shared session
 
       // ── Step 4: Reply shown — weave the turn into the World Model (orb: 'updating') ────────

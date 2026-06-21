@@ -206,6 +206,25 @@ pub fn open_path(target: String) -> Result<String, String> {
     { Err("open_path is macOS-only for now".into()) }
 }
 
+/// Copy text to the macOS clipboard (via `pbcopy`). Used by brainstorm-mode handoff so the owner
+/// can paste the prompt into ChatGPT/Claude/Gemini.
+#[tauri::command]
+pub fn copy_to_clipboard(text: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Write;
+        let mut child = Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        child.stdin.as_mut().ok_or("no stdin")?.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+        child.wait().map_err(|e| e.to_string())?;
+        Ok("copied".into())
+    }
+    #[cfg(not(target_os = "macos"))]
+    { let _ = text; Err("clipboard is macOS-only for now".into()) }
+}
+
 /// List directory entries (names only), confined to the user's home directory.
 /// Rejects any path that resolves outside home — no traversal (safety envelope from Mark-XL).
 #[tauri::command]

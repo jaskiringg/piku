@@ -1,4 +1,5 @@
 import type { TraceStep } from '../../../services/ToolRouter'
+import type { Mode } from '../../../services/modes/Modes'
 import { AgentContextStore } from '../../memory'
 import type { AgentContext, AgentTurn } from '../../memory'
 
@@ -134,6 +135,12 @@ class AgentHub {
   linkProject(projectId: string | undefined) {
     const ctx = this.active(); if (!ctx) return
     this.commit({ ...ctx, projectId })   // keep updatedAt → no reorder on link
+  }
+
+  setMode(mode: Mode) {
+    const ctx = this.active(); if (!ctx) return
+    if (ctx.mode === mode) return
+    this.commit({ ...ctx, mode })   // keep updatedAt → no reorder
   }
 }
 

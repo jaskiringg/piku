@@ -12,6 +12,9 @@ import { agentHub } from './agentSession'
 import { PIKU_PERSONA } from '../../../lib/persona'
 import { planReasoning, classifyIntent } from '../../../services/ReasoningPlanner'
 import type { ReasoningFlow } from '../../../services/ReasoningPlanner'
+import { opencodeProvider } from '../../../services/OpencodeProvider'
+import { detectMode, assembleMode, handoffToExternal, MODES } from '../../../services/modes/Modes'
+import type { Mode } from '../../../services/modes/Modes'
 
 const AGENT_SYSTEM_PROMPT = `${PIKU_PERSONA}
 
@@ -79,39 +82,92 @@ export function AgentScreen() {
   useEffect(() => { if (!running) inputRef.current?.focus() }, [running, ctx?.id])
 
   const linkedProject = ctx?.projectId ? projects.find(p => p.id === ctx.projectId) : undefined
+  const mode: Mode = ctx?.mode ?? 'auto'
+
+  // The reasoning brain: opencode (free, capable) → reasoning streams to the THINKING & ACTIONS
+  // panel and the answer to the main pane (this fixes the old leak where qwen3 dumped its chain-of-
+  // thought into the chat). Falls back to local Ollama if opencode is unreachable.
+  const runBrain = async (system: string, msg: string, history: { role: 'you' | 'piku'; text: string }[]) => {
+    try {
+      if (await opencodeProvider.ensureServer()) {
+        setPhase('thinking')
+        const reply = await opencodeProvider.chat(system, msg, history, t => setLiveThinking(p => p + t))
+        if (reply) {
+          setLiveAnswer(reply)
+          agentHub.addTurn({ role: 'piku', text: reply })
+          if (voiceOut) voiceService.speak(reply)
+          return
+        }
+      }
+    } catch { /* fall through to local */ }
+    const { reply, trace } = await toolRouter.runWithTools(
+      msg, system,
+      d => setLiveThinking(p => p + d),
+      d => { setPhase('listening'); setLiveAnswer(p => p + d) },
+      history, true,
+    )
+    agentHub.setTrace(trace)
+    agentHub.addTurn({ role: 'piku', text: reply || '(done)' })
+    if (voiceOut) voiceService.speak(reply)
+  }
 
   const run = async (text: string) => {
-    const t = text.trim()
-    if (!t || running) return
+    const raw = text.trim()
+    if (!raw || running) return
     voiceService.prime()
     setInput('')
-    const history = agentHub.active()?.turns ?? []   // prior turns — Piku remembers this context
-    agentHub.addTurn({ role: 'you', text: t })
+    // Mode triggers (/execute · "project mode" · …) — sticky per session.
+    const det = detectMode(raw)
+    if (det.mode) agentHub.setMode(det.mode)
+    const activeMode: Mode = agentHub.active()?.mode ?? 'auto'
+    const msg = det.cleaned || raw
+
+    const history = agentHub.active()?.turns ?? []
+    agentHub.addTurn({ role: 'you', text: raw })
     agentHub.setTrace([])
     setLiveThinking(''); setLiveAnswer(''); setLiveStatus(''); setFlow(null)
     setRunning(true); setPhase('thinking')
     try {
-      // Route once, deterministically: chores act now (no graph), complex asks reason (graph),
-      // simple chat just replies. think=true ONLY for complex → big latency cut on the 4b model.
-      const intent = classifyIntent(t)
-      const isComplex = intent.kind === 'complex'
-      if (isComplex) {
-        // Show the graph the INSTANT a complex turn starts (placeholder), then fill it from the
-        // planner async — so the right panel is never an empty box during the 10–30s reasoning.
-        setFlow({ simple: false, understand: ['Understanding the problem…'], plan: ['Working out the steps…'] })
-        void planReasoning(t).then(f => { if (!f.simple) setFlow(f) }).catch(() => {})
+      const onTool = (label: string) => { setLiveStatus(label); setPhase('acting') }
+      const runTools = async (system: string, think: boolean) => {
+        const { reply, trace } = await toolRouter.runWithTools(
+          msg, system,
+          d => setLiveThinking(p => p + d),
+          d => { setPhase('listening'); setLiveStatus(''); setLiveAnswer(p => p + d) },
+          history, think, onTool,
+        )
+        agentHub.setTrace(trace)
+        agentHub.addTurn({ role: 'piku', text: reply || '(done)' })
+        if (voiceOut) voiceService.speak(reply)
       }
-      const { reply, trace: tr } = await toolRouter.runWithTools(
-        t, AGENT_SYSTEM_PROMPT,
-        d => setLiveThinking(p => p + d),
-        d => { setPhase('listening'); setLiveStatus(''); setLiveAnswer(p => p + d) },   // answer streams live → no dead gap
-        history,
-        isComplex,                       // think = true only for complex asks
-        label => { setLiveStatus(label); setPhase('acting') },   // orb acts; "Checking Gmail…" the moment a tool fires
-      )
-      agentHub.setTrace(tr)
-      agentHub.addTurn({ role: 'piku', text: reply || '(done)' })
-      if (voiceOut) voiceService.speak(reply)
+
+      if (activeMode === 'auto') {
+        // Auto: classifyIntent decides — tool chores → ToolRouter; chat/complex → opencode brain.
+        const intent = classifyIntent(msg)
+        if (intent.kind === 'complex') {
+          setFlow({ simple: false, understand: ['Understanding the problem…'], plan: ['Working out the steps…'] })
+          void planReasoning(msg).then(f => { if (!f.simple) setFlow(f) }).catch(() => {})
+        }
+        if (intent.kind === 'tool') await runTools(AGENT_SYSTEM_PROMPT, false)
+        else                        await runBrain(AGENT_SYSTEM_PROMPT, msg, history)
+      } else {
+        const asm = await assembleMode(activeMode, { message: msg, linkedProject })
+        if (asm.note) setLiveStatus(asm.note)
+        if (asm.showGraph) {
+          const aspects = asm.graph?.nodes.length
+            ? asm.graph.nodes.slice(0, 6).map(n => `${n.type}: ${n.name}`)
+            : ['Framing the question…']
+          setFlow({ simple: false, understand: aspects, plan: ['Ground in context', 'Reason it through', 'Answer'] })
+        }
+        if (asm.handoff) {
+          await handoffToExternal(asm.handoff, msg)
+          agentHub.addTurn({ role: 'piku', text: `Opened ${asm.handoff.name} and copied your prompt to the clipboard — paste it there to continue the brainstorm.` })
+        } else if (asm.useTools) {
+          await runTools(AGENT_SYSTEM_PROMPT + '\n\n' + asm.systemAddon, false)
+        } else {
+          await runBrain(AGENT_SYSTEM_PROMPT + '\n\n' + asm.systemAddon, msg, history)
+        }
+      }
     } catch (e) {
       agentHub.addTurn({ role: 'piku', text: `Something went wrong: ${String(e)}` })
     } finally { setRunning(false); setPhase('idle'); setLiveThinking(''); setLiveAnswer(''); setLiveStatus('') }
@@ -316,6 +372,22 @@ export function AgentScreen() {
                   <div ref={convEnd} />
                 </div>
               )}
+            </div>
+
+            {/* mode pills — how Piku approaches this session (sticky; also set by /execute, "project mode", …) */}
+            <div className="flex items-center gap-1.5 px-3 pt-2 shrink-0">
+              {MODES.map(md => {
+                const on = md.id === mode
+                const edge = md.accent === 'violet' ? 'rgba(217,70,239,0.4)' : md.accent === 'amber' ? 'rgba(245,158,11,0.4)' : 'rgba(34,211,238,0.4)'
+                const txt  = on ? (md.accent === 'violet' ? 'text-fuchsia-200' : md.accent === 'amber' ? 'text-amber-200' : 'text-cyan-200') : 'text-white/35 hover:text-white/70'
+                return (
+                  <button key={md.id} onClick={() => agentHub.setMode(md.id)} title={`${md.label} mode`}
+                    className={`font-hud text-[9px] uppercase tracking-[0.14em] px-2 py-1 transition-colors ${txt}`}
+                    style={on ? { ...chamfer(5), boxShadow: `inset 0 0 0 1px ${edge}` } : undefined}>
+                    <span className="mr-1">{md.glyph}</span>{md.label}
+                  </button>
+                )
+              })}
             </div>
 
             {/* input */}
