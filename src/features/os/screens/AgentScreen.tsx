@@ -64,6 +64,8 @@ export function AgentScreen() {
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft]     = useState('')
   const [projMenu, setProjMenu]         = useState(false)
+  const [editingProj, setEditingProj]   = useState(false)
+  const [projDraft, setProjDraft]       = useState('')
 
   const inputRef = useRef<HTMLInputElement>(null)
   const convEnd  = useRef<HTMLDivElement>(null)
@@ -121,16 +123,31 @@ export function AgentScreen() {
 
   const commitTitle = () => { if (ctx) agentHub.rename(ctx.id, titleDraft); setEditingTitle(false) }
 
+  const commitProjName = async () => {
+    const name = projDraft.trim()
+    if (linkedProject && name && name !== linkedProject.name) {
+      await projectService.updateProject(linkedProject.id, { name }).catch(() => {})
+      loadProjects()
+    }
+    setEditingProj(false)
+  }
+
   const createProjectFromContext = async () => {
     if (!ctx) return
-    const name = (ctx.title && ctx.title !== 'New context') ? ctx.title : 'New project'
-    const firstYou = ctx.turns.find(t => t.role === 'you')?.text
+    // Never leave a project nameless: prefer the session title, then its first message, then a
+    // dated default — and open inline rename immediately so the user can set a real name.
+    const firstYou = ctx.turns.find(t => t.role === 'you')?.text?.trim()
+    const derived =
+      (ctx.title && ctx.title !== 'New context') ? ctx.title
+      : firstYou ? (firstYou.length > 46 ? `${firstYou.slice(0, 46).trimEnd()}…` : firstYou)
+      : `New project · ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
     try {
-      const project = await projectService.createProject(name, firstYou || name, 'Planning')
+      const project = await projectService.createProject(derived, firstYou || derived, 'Planning')
       agentHub.linkProject(project.id)
       loadProjects()
-    } catch { /* ignore */ }
-    setProjMenu(false)
+      setProjMenu(false)
+      setProjDraft(project.name); setEditingProj(true)
+    } catch { setProjMenu(false) }
   }
 
   return (
@@ -206,7 +223,16 @@ export function AgentScreen() {
             <div className="relative">
               {linkedProject ? (
                 <span className="font-hud text-[9.5px] uppercase tracking-[0.12em] text-fuchsia-200/90 flex items-center gap-1.5">
-                  ◆ {linkedProject.name}
+                  <span>◆</span>
+                  {editingProj ? (
+                    <input autoFocus value={projDraft} onChange={e => setProjDraft(e.target.value)}
+                      onBlur={commitProjName}
+                      onKeyDown={e => { if (e.key === 'Enter') commitProjName(); if (e.key === 'Escape') setEditingProj(false) }}
+                      className="bg-transparent text-fuchsia-100 border-b border-fuchsia-400/40 outline-none uppercase tracking-[0.12em] w-32" />
+                  ) : (
+                    <button onClick={() => { setProjDraft(linkedProject.name); setEditingProj(true) }}
+                      className="hover:text-fuchsia-100 transition-colors max-w-[140px] truncate" title="Rename project">{linkedProject.name}</button>
+                  )}
                   <button onClick={() => agentHub.linkProject(undefined)} className="text-fuchsia-300/50 hover:text-fuchsia-200" title="Unlink">×</button>
                 </span>
               ) : (
