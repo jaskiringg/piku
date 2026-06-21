@@ -18,7 +18,8 @@ src-tauri/target/
 .env.local
 .env.*.local
 
-# Personal & runtime data (not source code)
-piku-vault/
-memory/
-obsedian for piku/
+# Personal & runtime data (not source code) — anchored to repo root so they don't
+# accidentally match source dirs like src/features/memory/ (Piku's persistence layer).
+/piku-vault/
+/memory/
+/obsedian for piku/
