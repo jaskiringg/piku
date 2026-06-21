@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PresenceState } from '../../../types'
 import type { Project } from '../../projects/types'
-import { ScreenShell, BuildStatus, Hint } from './ScreenShell'
+import { ScreenShell, Hint } from './ScreenShell'
 import { chamfer } from '../Hud'
 import { Orb } from '../../orb'
 import { toolRouter } from '../../../services/ToolRouter'
@@ -194,11 +194,20 @@ export function AgentScreen() {
     setEditingProj(false)
   }
 
-  // Rename a project straight from the Sessions rail.
+  // Rename a project from the bottom Projects bar (or the linked-project chip).
   const commitRename = async () => {
     const id = renamingId, name = renameDraft.trim()
     if (id && name) { await projectService.updateProject(id, { name }).catch(() => {}); loadProjects() }
     setRenamingId(null)
+  }
+
+  // Create a fresh project from the Projects bar, then open inline rename.
+  const createBlankProject = async () => {
+    const base = `New project · ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+    try {
+      const p = await projectService.createProject(base, base, 'Planning')
+      loadProjects(); setRenameDraft(p.name); setRenamingId(p.id)
+    } catch { /* ignore */ }
   }
 
   const createProjectFromContext = async () => {
@@ -230,40 +239,18 @@ export function AgentScreen() {
         <Frame className="col-span-12 lg:col-span-3" label="Sessions" code={String(contexts.length).padStart(2, '0')}>
           <div className="h-full overflow-y-auto px-2 py-2 flex flex-col gap-1">
 
+            {/* presence orb — the protagonist, on the left */}
+            <div className="flex flex-col items-center pt-3 pb-4 shrink-0">
+              <Orb presence={phase} size={104} />
+              <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-cyan-300/55 mt-2">{running ? (liveStatus || 'thinking…') : 'here with you'}</div>
+            </div>
+
             {/* prominent new-session */}
             <button onClick={() => agentHub.createContext()}
               className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 mb-1 font-hud text-[10.5px] uppercase tracking-[0.18em] text-cyan-100 bg-cyan-500/12 hover:bg-cyan-500/20 transition-colors"
               style={{ ...chamfer(8), boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.3)' }}>
               <span className="text-cyan-300 text-glow-cyan text-[13px]">＋</span> New session
             </button>
-
-            {/* Projects — start a session inside a project */}
-            {projects.length > 0 && (
-              <div className="mt-2">
-                <div className="font-hud text-[8.5px] uppercase tracking-[0.22em] text-fuchsia-200/55 px-2 pb-1.5 pt-1">Projects</div>
-                {projects.map(p => {
-                  const n = contexts.filter(c => c.projectId === p.id).length
-                  return (
-                    <div key={p.id} className="group/p flex items-center gap-2 px-2.5 py-1.5 hover:bg-fuchsia-500/[0.06] transition-colors">
-                      <span className="text-fuchsia-300/70 text-[10px] shrink-0">◆</span>
-                      {renamingId === p.id ? (
-                        <input autoFocus value={renameDraft} onChange={e => setRenameDraft(e.target.value)}
-                          onBlur={commitRename}
-                          onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenamingId(null) }}
-                          className="flex-1 min-w-0 bg-transparent text-[12px] text-white/90 border-b border-fuchsia-400/40 outline-none" />
-                      ) : (
-                        <button onClick={() => { agentHub.createContext(); agentHub.linkProject(p.id) }}
-                          title={`New session in ${p.name}`}
-                          className="flex-1 min-w-0 text-left text-[12px] text-white/70 truncate group-hover/p:text-white/90">{p.name}</button>
-                      )}
-                      {n > 0 && renamingId !== p.id && <span className="font-hud text-[8.5px] text-white/30">{n}</span>}
-                      <button onClick={() => { setRenameDraft(p.name); setRenamingId(p.id) }} title="Rename project"
-                        className="font-hud text-[10px] text-transparent group-hover/p:text-white/40 hover:!text-fuchsia-200 transition-colors">✎</button>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
 
             {/* Sessions list */}
             <div className="font-hud text-[8.5px] uppercase tracking-[0.22em] text-cyan-200/45 px-2 pb-1.5 pt-3">Recent</div>
@@ -295,7 +282,7 @@ export function AgentScreen() {
         </Frame>
 
         {/* ── CONVERSATION ── */}
-        <Frame className="col-span-12 lg:col-span-5" label="Context" code={ctx ? ctx.title.slice(0, 18) : '—'}
+        <Frame className="col-span-12 lg:col-span-6" label="Context" code={ctx ? ctx.title.slice(0, 18) : '—'}
           action={
             <div className="relative">
               {linkedProject ? (
@@ -338,20 +325,18 @@ export function AgentScreen() {
             </div>
           }>
           <div className="flex flex-col h-full min-h-0">
-            {/* presence + editable title */}
-            <div className="flex flex-col items-center pt-5 pb-3 px-6 shrink-0">
-              <Orb presence={phase} size={104} />
+            {/* editable session title (orb lives on the left rail now) */}
+            <div className="flex items-center justify-center pt-3.5 pb-3 px-6 shrink-0 border-b border-white/[0.05]">
               {editingTitle ? (
                 <input autoFocus value={titleDraft} onChange={e => setTitleDraft(e.target.value)}
                   onBlur={commitTitle} onKeyDown={e => { if (e.key === 'Enter') commitTitle(); if (e.key === 'Escape') setEditingTitle(false) }}
-                  className="mt-3 bg-transparent text-center text-[14px] text-white/90 border-b border-cyan-400/40 outline-none" />
+                  className="bg-transparent text-center text-[14px] text-white/90 border-b border-cyan-400/40 outline-none" />
               ) : (
                 <button onClick={() => { setTitleDraft(ctx?.title ?? ''); setEditingTitle(true) }}
-                  className="mt-3 text-[14px] text-white/85 hover:text-white max-w-full truncate transition-colors" title="Rename context">
+                  className="text-[14px] text-white/85 hover:text-white max-w-full truncate transition-colors" title="Rename session">
                   {ctx?.title || 'New context'}
                 </button>
               )}
-              <div className="font-hud text-[10px] uppercase tracking-[0.15em] text-cyan-300/55 mt-1">{running ? 'thinking…' : 'here with you'}</div>
             </div>
 
             {/* transcript */}
@@ -435,7 +420,7 @@ export function AgentScreen() {
         </Frame>
 
         {/* ── REASONING FLOW: understand → plan → act (act = live thinking + trace) ── */}
-        <Frame className="col-span-12 lg:col-span-4" label={flow ? 'Reasoning Flow' : 'Thinking & Actions'} accent="violet"
+        <Frame className="col-span-12 lg:col-span-3" label={flow ? 'Reasoning Flow' : 'Thinking & Actions'} accent="violet"
           action={<span className={`w-1.5 h-1.5 rounded-full ${running ? 'bg-fuchsia-400 animate-pulse' : 'bg-white/25'}`} />}>
           <div className="h-full overflow-y-auto px-5 py-4 flex flex-col gap-4">
             {flow && (
@@ -464,12 +449,43 @@ export function AgentScreen() {
         </Frame>
       </div>
 
-      <BuildStatus items={[
-        { label: 'Multi-session hub — new chats = new sessions', state: 'built' },
-        { label: 'Sessions persisted to IndexedDB v7', state: 'built' },
-        { label: 'Projects rail — start a session inside a project', state: 'built' },
-        { label: 'Per-session World-Model graph view', state: 'planned' },
-      ]} />
+      {/* ── PROJECTS BAR (bottom) — group sessions + ground PROJECT mode ── */}
+      <div className="mt-4">
+        <Frame label="Projects" code={String(projects.length).padStart(2, '0')} accent="violet"
+          action={
+            <button onClick={createBlankProject}
+              className="font-hud text-[9.5px] uppercase tracking-[0.15em] text-fuchsia-200 hover:text-fuchsia-100 transition-colors flex items-center gap-1">
+              <span className="text-fuchsia-300 text-glow-violet">＋</span> New project
+            </button>
+          }>
+          <div className="flex items-center gap-2 overflow-x-auto px-1 py-1">
+            {projects.length === 0 ? (
+              <span className="font-hud text-[10px] uppercase tracking-wider text-white/30 px-2 py-2">No projects yet — create one to group sessions and ground PROJECT mode.</span>
+            ) : projects.map(p => {
+              const n = contexts.filter(c => c.projectId === p.id).length
+              return (
+                <div key={p.id} className="group/pb shrink-0 flex items-center gap-2 px-3 py-2"
+                  style={{ ...chamfer(7), background: 'rgba(217,70,239,0.06)', boxShadow: 'inset 0 0 0 1px rgba(217,70,239,0.2)' }}>
+                  <span className="text-fuchsia-300/80 text-[11px] shrink-0">◆</span>
+                  {renamingId === p.id ? (
+                    <input autoFocus value={renameDraft} onChange={e => setRenameDraft(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenamingId(null) }}
+                      className="bg-transparent text-[12.5px] text-white/90 border-b border-fuchsia-400/40 outline-none w-36" />
+                  ) : (
+                    <button onClick={() => { agentHub.createContext(); agentHub.linkProject(p.id) }}
+                      title={`New session in ${p.name}`}
+                      className="text-[12.5px] text-white/80 hover:text-white truncate max-w-[180px]">{p.name}</button>
+                  )}
+                  <span className="font-hud text-[8.5px] text-white/35 shrink-0">{n}</span>
+                  <button onClick={() => { setRenameDraft(p.name); setRenamingId(p.id) }} title="Rename project"
+                    className="font-hud text-[10px] text-white/25 group-hover/pb:text-fuchsia-200 transition-colors shrink-0">✎</button>
+                </div>
+              )
+            })}
+          </div>
+        </Frame>
+      </div>
     </ScreenShell>
   )
 }
