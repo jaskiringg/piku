@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode, FC } from 'react'
 import { Card } from '../Card'
+import { HudPanel, HudChip, chamfer } from '../Hud'
 import type { NavKey } from '../Sidebar'
 import { ScreenShell, BuildStatus, Hint } from './ScreenShell'
 import { projectService } from '../../projects/components/ProjectDashboard'
@@ -18,32 +19,29 @@ const Pill = ({ children, tone = 'idle' }: { children: ReactNode; tone?: 'run' |
 
 /* ───────────────────────── Models ───────────────────────── */
 
-const SectionLabel = ({ children }: { children: ReactNode }) => (
-  <div className="col-span-12 font-hud text-[10px] uppercase tracking-[0.22em] text-white/35 mt-3 mb-0.5 first:mt-0">{children}</div>
-)
-
 // Known local-model blurbs; anything else discovered via listModels() falls back to a generic
 // descriptor, so freshly-pulled models still show up.
-const KNOWN_MODELS: Record<string, { kind: string; note: string; glyph: string }> = {
-  'qwen3:4b':         { kind: 'Chat · default',         note: 'Streaming + live thinking',  glyph: '◈' },
-  'qwen3:14b':        { kind: 'Chat · heavy reasoning', note: 'Swaps in for hard tasks',     glyph: '◈' },
-  'nomic-embed-text': { kind: 'Embeddings · 137M',      note: 'Memory & retrieval vectors',  glyph: '≈' },
+const KNOWN_MODELS: Record<string, { kind: string; glyph: string }> = {
+  'qwen3:4b':         { kind: 'Chat · default',         glyph: '◈' },
+  'qwen3:14b':        { kind: 'Chat · heavy reasoning', glyph: '◈' },
+  'nomic-embed-text': { kind: 'Embeddings · 137M',      glyph: '≈' },
 }
 function modelMeta(name: string) {
   return KNOWN_MODELS[name]
     ?? KNOWN_MODELS[name.split(':')[0]]
-    ?? { kind: /embed/i.test(name) ? 'Embeddings' : 'Chat · local', note: 'Local Ollama model', glyph: '◈' }
+    ?? { kind: /embed/i.test(name) ? 'Embeddings' : 'Chat · local', glyph: '◈' }
 }
 
-// External assistants Piku can hand off to — launched through the existing open_app / open_in_app
-// Rust commands. Desktop apps fall back to their web app in Chrome if not installed.
-interface Assistant { key: string; name: string; kind: string; note: string; glyph: string; app?: string; fallbackApp?: string; web?: string }
+// Assistants you can open for YOURSELF (manual handoff) — launched via the open_app / open_in_app
+// Rust commands; desktop apps fall back to their web app in Chrome if not installed. (opencode is
+// NOT here — it's a real reasoning backend, see panel 02.)
+interface Assistant { key: string; name: string; kind: string; glyph: string; app?: string; fallbackApp?: string; web?: string }
 const ASSISTANTS: Assistant[] = [
-  { key: 'chatgpt',  name: 'ChatGPT',  kind: 'OpenAI · app',      note: 'GPT-4o / o-series — opens the desktop app',                       glyph: '✦', app: 'ChatGPT',  web: 'https://chatgpt.com' },
-  { key: 'claude',   name: 'Claude',   kind: 'Anthropic · app',   note: 'Opus / Sonnet — opens the desktop app',                           glyph: '✶', app: 'Claude',   web: 'https://claude.ai' },
-  { key: 'gemini',   name: 'Gemini',   kind: 'Google · web',      note: '2.5 Pro / Flash — opens in Chrome',                               glyph: '✧', web: 'https://gemini.google.com/app' },
-  { key: 'opencode', name: 'opencode', kind: 'CLI · free models', note: 'Free models (Grok, GLM, Qwen, DeepSeek) — opens the app or Terminal', glyph: '⌘', app: 'opencode', fallbackApp: 'Terminal' },
+  { key: 'chatgpt', name: 'ChatGPT', kind: 'OpenAI · app',    glyph: '✦', app: 'ChatGPT', web: 'https://chatgpt.com' },
+  { key: 'claude',  name: 'Claude',  kind: 'Anthropic · app', glyph: '✶', app: 'Claude',  web: 'https://claude.ai' },
+  { key: 'gemini',  name: 'Gemini',  kind: 'Google · web',    glyph: '✧', web: 'https://gemini.google.com/app' },
 ]
+const OPENCODE: Assistant = { key: 'opencode', name: 'opencode', kind: 'CLI · free models', glyph: '⌘', app: 'opencode', fallbackApp: 'Terminal' }
 
 async function launchAssistant(a: Assistant): Promise<void> {
   try {
@@ -60,6 +58,14 @@ async function launchAssistant(a: Assistant): Promise<void> {
   } catch { /* not running inside the desktop app */ }
 }
 
+// Chamfered glyph badge — the HUD language (matches Home), not a rounded glass chip.
+const Glyph = ({ children, accent = 'cyan' }: { children: ReactNode; accent?: 'cyan' | 'violet' }) => (
+  <span className={`w-9 h-9 shrink-0 flex items-center justify-center text-[15px] ${accent === 'violet' ? 'text-fuchsia-200/80' : 'text-cyan-300/80'}`}
+    style={{ ...chamfer(7), background: accent === 'violet' ? 'rgba(217,70,239,0.08)' : 'rgba(34,211,238,0.08)', boxShadow: `inset 0 0 0 1px ${accent === 'violet' ? 'rgba(217,70,239,0.25)' : 'rgba(34,211,238,0.25)'}` }}>
+    {children}
+  </span>
+)
+
 export function ModelsScreen() {
   const [localModels, setLocalModels] = useState<string[]>(Object.keys(KNOWN_MODELS))
   useEffect(() => {
@@ -68,69 +74,85 @@ export function ModelsScreen() {
   const defaultModel = ACTIVE_BRAIN.model
 
   return (
-    <ScreenShell title="Models" subtitle="Local inference on-device — plus one-tap handoff to the big assistants." action={<AddBtn label="+ Pull model" />}>
+    <ScreenShell title="Models" subtitle="Piku's brains — fast & private on-device, capable & free via opencode." action={<AddBtn label="+ Pull model" />}>
       <div className="grid grid-cols-12 gap-4">
 
-        {/* ── Local, on-device ── */}
-        <SectionLabel>Local · on-device · private</SectionLabel>
-        {localModels.map(name => {
-          const m = modelMeta(name)
-          const running = name === defaultModel
-          return (
-            <Card key={name} className="col-span-12 md:col-span-4">
-              <div className="flex items-center gap-2.5 mb-2">
-                <span className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-400/15 flex items-center justify-center text-cyan-300/80">{m.glyph}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-white/90 truncate">{name}</div>
-                  <div className="text-[10px] text-white/35">{m.kind}</div>
+        {/* ── Local brain ── */}
+        <HudPanel className="col-span-12 lg:col-span-7" label="Local brain" code="01">
+          <div className="flex flex-col gap-2">
+            {localModels.map(name => {
+              const m = modelMeta(name)
+              const running = name === defaultModel
+              return (
+                <div key={name} className="flex items-center gap-3 px-3 py-2.5" style={{ ...chamfer(8), background: 'rgba(255,255,255,0.025)' }}>
+                  <Glyph>{m.glyph}</Glyph>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13.5px] text-white/90 truncate">{name}</div>
+                    <div className="font-hud text-[9.5px] uppercase tracking-wider text-white/35 mt-0.5">{m.kind}</div>
+                  </div>
+                  <HudChip dim={!running}>{running ? 'running' : 'idle'}</HudChip>
                 </div>
-                <Pill tone={running ? 'run' : 'idle'}>{running ? 'Running' : 'Idle'}</Pill>
-              </div>
-              <Hint>{m.note}</Hint>
-            </Card>
-          )
-        })}
+              )
+            })}
+          </div>
+          <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-cyan-300/40 mt-3">On-device · private · instant — handles ambient + quick turns</div>
+        </HudPanel>
 
-        {/* ── External assistants — launch & hand off ── */}
-        <SectionLabel>Assistants · launch &amp; hand off</SectionLabel>
-        {ASSISTANTS.map(a => (
-          <Card key={a.key} className="col-span-12 md:col-span-6 lg:col-span-3">
-            <div className="flex items-center gap-2.5 mb-2">
-              <span className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-400/15 flex items-center justify-center text-cyan-300/80">{a.glyph}</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm text-white/90 truncate">{a.name}</div>
-                <div className="text-[10px] text-white/35">{a.kind}</div>
+        {/* ── opencode brain (free, capable) ── */}
+        <HudPanel className="col-span-12 lg:col-span-5" label="opencode" code="02" accent="violet"
+          action={<HudChip accent="violet" dim>wiring</HudChip>}>
+          <div className="flex items-start gap-3">
+            <Glyph accent="violet">⌘</Glyph>
+            <p className="text-[12.5px] leading-relaxed text-white/65">
+              Piku's <span className="text-fuchsia-200/90">deep-thinking brain</span>: free, capable models (Grok Code Fast 1 &amp; co.) driven through opencode — for the hard asks the local 4B can't handle. Runs headless in a Piku workspace that carries your context.
+            </p>
+          </div>
+          <button onClick={() => void launchAssistant(OPENCODE)}
+            className="mt-3 w-full font-hud text-[10px] uppercase tracking-[0.18em] text-fuchsia-100 bg-fuchsia-500/12 hover:bg-fuchsia-500/20 py-2.5 transition-colors"
+            style={{ ...chamfer(8), boxShadow: 'inset 0 0 0 1px rgba(217,70,239,0.3)' }}>
+            Open opencode →
+          </button>
+        </HudPanel>
+
+        {/* ── Open for yourself (manual handoff) ── */}
+        <HudPanel className="col-span-12" label="Open for yourself" code="03">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {ASSISTANTS.map(a => (
+              <div key={a.key} className="flex items-center gap-3 px-3 py-2.5" style={{ ...chamfer(8), background: 'rgba(255,255,255,0.025)' }}>
+                <Glyph>{a.glyph}</Glyph>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13.5px] text-white/90 truncate">{a.name}</div>
+                  <div className="font-hud text-[9.5px] uppercase tracking-wider text-white/35 mt-0.5">{a.kind}</div>
+                </div>
+                <button onClick={() => void launchAssistant(a)}
+                  className="font-hud text-[9.5px] uppercase tracking-[0.15em] text-cyan-200 hover:text-cyan-100 px-2.5 py-1.5 transition-colors"
+                  style={{ ...chamfer(6), boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.25)' }}>Open</button>
               </div>
-            </div>
-            <Hint>{a.note}</Hint>
-            <button onClick={() => void launchAssistant(a)}
-              className="mt-3 w-full text-[11px] uppercase tracking-[0.15em] text-cyan-100 bg-cyan-500/12 hover:bg-cyan-500/22 border border-cyan-400/20 rounded-lg py-2 transition-colors">
-              Open →
-            </button>
-          </Card>
-        ))}
+            ))}
+          </div>
+          <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-white/30 mt-3">Opens the app for you — your account, your tab. Piku doesn't drive these.</div>
+        </HudPanel>
 
         {/* ── Routing ── */}
-        <SectionLabel>Routing</SectionLabel>
-        <Card className="col-span-12">
-          <div className="flex flex-col sm:flex-row gap-3 text-xs">
-            <div className="flex-1 rounded-xl bg-cyan-500/[0.06] border border-cyan-400/15 p-3">
-              <div className="text-cyan-300/80 mb-1">Now — local + manual handoff</div>
-              <Hint>Local Ollama answers everything through <span className="text-white/70">OllamaService</span> — no network, no key. For the heavy stuff, open an assistant above; nothing leaves the machine unless you do.</Hint>
+        <HudPanel className="col-span-12" label="Routing" code="04">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1 p-3" style={{ ...chamfer(8), background: 'rgba(34,211,238,0.05)', boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.15)' }}>
+              <div className="font-hud text-[10px] uppercase tracking-[0.18em] text-cyan-300/80 mb-1.5">Now — local + manual handoff</div>
+              <Hint>Local Ollama answers everything through <span className="text-white/70">OllamaService</span> — no network, no key. Open an assistant for the heavy stuff; nothing leaves the machine unless you do.</Hint>
             </div>
-            <div className="flex-1 rounded-xl bg-cyan-400/[0.05] border border-cyan-300/20 p-3">
-              <div className="text-cyan-200/80 mb-1">Next — ProviderRegistry</div>
-              <Hint>Automatic capability routing: local Ollama for most, escalate hard tasks to Claude via the <span className="text-white/70">claude CLI</span> (K2: never an API key).</Hint>
+            <div className="flex-1 p-3" style={{ ...chamfer(8), background: 'rgba(217,70,239,0.05)', boxShadow: 'inset 0 0 0 1px rgba(217,70,239,0.18)' }}>
+              <div className="font-hud text-[10px] uppercase tracking-[0.18em] text-fuchsia-200/80 mb-1.5">Next — capability routing</div>
+              <Hint>Piku routes by need: local for ambient + quick turns, <span className="text-white/70">opencode</span> (free, capable) for hard thinking. Routed by capability, never by model name (P1).</Hint>
             </div>
           </div>
-        </Card>
+        </HudPanel>
       </div>
       <BuildStatus items={[
         { label: 'OllamaService — local, streaming', state: 'built' },
         { label: 'Embeddings → IndexedDB', state: 'built' },
-        { label: 'Launch assistants — ChatGPT / Claude / Gemini / opencode', state: 'built' },
-        { label: 'ProviderRegistry — automatic capability routing', state: 'planned' },
-        { label: 'Claude-CLI Tier-2 escalation', state: 'planned' },
+        { label: 'Open assistants — ChatGPT / Claude / Gemini', state: 'built' },
+        { label: 'opencode provider — free capable reasoning', state: 'active' },
+        { label: 'Capability routing (local ↔ opencode)', state: 'planned' },
       ]} />
     </ScreenShell>
   )
