@@ -126,6 +126,22 @@ const HUBS = [
   { x:   6, y: -87, r: 2.5, delay: 12.2 },
 ]
 
+// New presence states reuse the three tuned base motions (the approved animation stays untouched);
+// distinctness for those states comes from which base they map to + a per-state cue (e.g. the
+// "strand woven in" during `updating`). acting = mind working (thinking); speaking = oriented
+// toward you (listening); updating = connections forming (thinking) + the woven-strand overlay.
+type BaseMotion = 'idle' | 'listening' | 'thinking'
+function baseMotion(s: PresenceState): BaseMotion {
+  switch (s) {
+    case 'acting':
+    case 'updating':  return 'thinking'
+    case 'speaking':  return 'listening'
+    case 'listening': return 'listening'
+    case 'thinking':  return 'thinking'
+    default:          return 'idle'
+  }
+}
+
 // ── Sub-components ─────────────────────────────────────────────────────────
 
 function WeaveLayer({
@@ -143,7 +159,7 @@ function WeaveLayer({
 // Memory hubs — soft glowing points at intersection-like positions.
 // No circles are "drawn" visually; they are entirely dissolved by the blur filter
 // into soft luminous regions that feel like natural strand crossings.
-function MemoryHubs({ state }: { state: PresenceState }) {
+function MemoryHubs({ base }: { base: BaseMotion }) {
   return (
     <g filter="url(#f-hub)" style={{ mixBlendMode: 'screen' }}>
       {HUBS.map((hub, i) => (
@@ -154,7 +170,7 @@ function MemoryHubs({ state }: { state: PresenceState }) {
           r={hub.r}
           fill="rgba(147,197,253,1)"
           variants={hubVariants(hub.delay)}
-          animate={state}
+          animate={base}
         />
       ))}
     </g>
@@ -199,6 +215,7 @@ interface Props {
 }
 
 export function OrbCore({ state }: Props) {
+  const base = baseMotion(state)   // the three tuned base motions drive every layer
   return (
     // Scale breathing lives here. No translation, no rotation — only breath.
     // Listening holds at scale 1.0: the stillness is the signal.
@@ -206,7 +223,7 @@ export function OrbCore({ state }: Props) {
       className="relative flex items-center justify-center pointer-events-none select-none"
       style={{ width: SVG_SIZE, height: SVG_SIZE }}
       variants={sphereBreathVariants}
-      animate={state}
+      animate={base}
     >
 
       {/* CSS outer haze — dims during Listening (focus), moderate during Thinking */}
@@ -225,7 +242,7 @@ export function OrbCore({ state }: Props) {
           filter: 'blur(28px)',
         }}
         variants={atmosphereVariants}
-        animate={state}
+        animate={base}
       />
 
       <svg
@@ -285,7 +302,7 @@ export function OrbCore({ state }: Props) {
             During Thinking: illuminates — specific deep regions activate.
             The deep layer is the visual metaphor of memory coming to surface.
           */}
-          <motion.g variants={deepWebVariants} animate={state}>
+          <motion.g variants={deepWebVariants} animate={base}>
             <WeaveLayer
               paths={deepPaths}
               stroke="rgba(59,130,246,0.52)"
@@ -301,7 +318,7 @@ export function OrbCore({ state }: Props) {
             In Thinking: surface dramatically and retreat — memories appearing.
             Two groups at different phases so they pulse independently.
           */}
-          <motion.g variants={hiddenPathwayVariants(0)} animate={state}>
+          <motion.g variants={hiddenPathwayVariants(0)} animate={base}>
             <WeaveLayer
               paths={hiddenPaths.slice(0, 32)}
               stroke="rgba(147,197,253,0.88)"
@@ -309,7 +326,7 @@ export function OrbCore({ state }: Props) {
               filter="url(#f-mid)"
             />
           </motion.g>
-          <motion.g variants={hiddenPathwayVariants(5.2)} animate={state}>
+          <motion.g variants={hiddenPathwayVariants(5.2)} animate={base}>
             <WeaveLayer
               paths={hiddenPaths.slice(32)}
               stroke="rgba(96,165,250,0.76)"
@@ -325,7 +342,7 @@ export function OrbCore({ state }: Props) {
             In Idle: dim, barely noticeable.
             In Thinking: briefly luminous. "A connection being remembered."
           */}
-          <MemoryHubs state={state} />
+          <MemoryHubs base={base} />
 
           {/*
             LAYER 4: Mid weave
@@ -333,7 +350,7 @@ export function OrbCore({ state }: Props) {
             Slight blur creates depth separation from foreground.
             Breathes gently so there is subtle interior variation at rest.
           */}
-          <motion.g variants={midWeaveVariants} animate={state}>
+          <motion.g variants={midWeaveVariants} animate={base}>
             <WeaveLayer
               paths={weavePaths2}
               stroke="rgba(96,165,250,0.42)"
@@ -362,7 +379,7 @@ export function OrbCore({ state }: Props) {
             Stable across states. This is the structure of the mind.
             Slightly dims in Thinking so activated regions stand out against it.
           */}
-          <motion.g variants={foregroundWeaveVariants} animate={state}>
+          <motion.g variants={foregroundWeaveVariants} animate={base}>
             <WeaveLayer
               paths={weavePaths1}
               stroke="rgba(96,165,250,0.54)"
@@ -377,7 +394,7 @@ export function OrbCore({ state }: Props) {
             These natural crossing brightening are the "memory hubs" that emerge
             from density — not drawn, just a consequence of the weave.
           */}
-          <motion.g variants={bloomVariants} animate={state}>
+          <motion.g variants={bloomVariants} animate={base}>
             <WeaveLayer
               paths={weavePaths1}
               stroke="rgba(96,165,250,0.62)"
@@ -385,6 +402,37 @@ export function OrbCore({ state }: Props) {
               filter="url(#f-bloom)"
             />
           </motion.g>
+
+          {/*
+            UPDATING cue — a new strand woven into the mind. Shown only while Piku is writing the
+            turn into the World Model (GDD: "updating memory = a new thread woven in"). One brief
+            motion: a near-white strand draws itself along a real path, then settles. Appears for no
+            other state, so it never competes with the resting weave (orb law: one motion at a time).
+          */}
+          {state === 'updating' && (
+            <motion.g
+              style={{ mixBlendMode: 'screen' }}
+              filter="url(#f-current)"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 1, 0.55] }}
+              transition={{ duration: 1.3, ease: 'easeInOut' }}
+            >
+              {[weavePaths1[5], weavePaths1[23]].map((d, i) => (
+                <motion.path
+                  key={i}
+                  d={d}
+                  fill="none"
+                  stroke="rgba(224,242,255,0.95)"
+                  strokeWidth={0.95}
+                  strokeLinecap="round"
+                  strokeDasharray="600 600"
+                  initial={{ strokeDashoffset: 600 }}
+                  animate={{ strokeDashoffset: 0 }}
+                  transition={{ duration: 1.1, delay: i * 0.22, ease: 'easeInOut' }}
+                />
+              ))}
+            </motion.g>
+          )}
 
           {/*
             LAYER 8: Thought currents
@@ -397,7 +445,7 @@ export function OrbCore({ state }: Props) {
             At any moment you see 0 or 1 — never a stream.
             Each appearance feels like a single connection being traced.
           */}
-          <motion.g variants={pulseVariants} animate={state} filter="url(#f-current)">
+          <motion.g variants={pulseVariants} animate={base} filter="url(#f-current)">
             <ThoughtCurrents />
           </motion.g>
 

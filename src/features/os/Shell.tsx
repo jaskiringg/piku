@@ -29,8 +29,13 @@ export function Shell() {
   const { sendMessage, isSending } = useChat({
     addMessage, setPresenceState, setInputText, updateLastPikuMessage, updateLastPikuThinking,
   })
+  const [voiceOn, setVoiceOn]     = useState(true)   // Piku speaks replies by default
+  const [listening, setListening] = useState(false)
+  const [speaking, setSpeaking]   = useState(false)
   useConversationPersistence({ chatHistory, setChatHistory, isSending })
-  usePresenceCycle(setPresenceState, isSending)
+  // Pause the autonomous idle cycle whenever the loop owns presence — sending, speaking aloud, or
+  // weaving the turn into memory (updating) — so those states aren't overwritten by the cycle.
+  usePresenceCycle(setPresenceState, isSending || speaking || presenceState === 'updating')
 
   const [view, setView] = useState<NavKey>('home')
   const [focusGalaxyId, setFocusGalaxyId] = useState<string | null>(null)
@@ -54,22 +59,23 @@ export function Shell() {
     connectorFeed.startAutoRefresh()   // shared connector cache refreshes every 5 min
   }, [])
 
-  const [voiceOn, setVoiceOn]     = useState(true)   // Piku speaks replies by default
-  const [listening, setListening] = useState(false)
-  const [speaking, setSpeaking]   = useState(false)
   const stopListenRef = useRef<(() => void) | null>(null)
   const prevSending   = useRef(false)
 
   // 2.5-Voice — speak Piku's reply aloud once a response finishes (when voice is on).
+  // While speaking, the orb takes the 'speaking' presence (then returns to idle).
   useEffect(() => {
     if (prevSending.current && !isSending && voiceOn) {
       const last = chatHistory[chatHistory.length - 1]
       if (last?.sender === 'piku' && last.text.trim()) {
-        voiceService.speak(last.text, { onStart: () => setSpeaking(true), onEnd: () => setSpeaking(false) })
+        voiceService.speak(last.text, {
+          onStart: () => { setSpeaking(true); setPresenceState('speaking') },
+          onEnd:   () => { setSpeaking(false); setPresenceState('idle') },
+        })
       }
     }
     prevSending.current = isSending
-  }, [isSending, voiceOn, chatHistory])
+  }, [isSending, voiceOn, chatHistory, setPresenceState])
 
   // Push-to-talk: mic → live transcript into the input → auto-send on final.
   const toggleListening = () => {

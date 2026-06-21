@@ -25,6 +25,9 @@ const PRESENCE: Record<PresenceState, { dot: string; glow: string; pulse: boolea
   idle:      { dot: 'bg-cyan-400',  glow: 'shadow-[0_0_14px_3px_rgba(34,211,238,0.45)]', pulse: false },
   listening: { dot: 'bg-cyan-300',   glow: 'shadow-[0_0_18px_4px_rgba(125,211,252,0.6)]', pulse: false },
   thinking:  { dot: 'bg-cyan-300',  glow: 'shadow-[0_0_18px_4px_rgba(56,189,248,0.6)]',  pulse: true  },
+  acting:    { dot: 'bg-cyan-300',  glow: 'shadow-[0_0_18px_4px_rgba(56,189,248,0.6)]',  pulse: true  },
+  speaking:  { dot: 'bg-cyan-300',  glow: 'shadow-[0_0_18px_4px_rgba(125,211,252,0.6)]', pulse: false },
+  updating:  { dot: 'bg-cyan-200',  glow: 'shadow-[0_0_20px_5px_rgba(186,230,253,0.65)]', pulse: true  },
 }
 
 type PanelKey = 'projects' | 'vault' | 'sources' | 'memories'

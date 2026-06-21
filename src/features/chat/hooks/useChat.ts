@@ -110,7 +110,7 @@ export function useChat({ addMessage, setPresenceState, setInputText, updateLast
           (delta) => { acc += delta; updateLastPikuMessage(acc) },
           [],   // no prior history in Home ask bar (each ask is standalone for now)
           think,
-          (label) => updateLastPikuThinking(label),   // "Checking Gmail…" surfaces while a chore runs
+          (label) => { setPresenceState('acting'); updateLastPikuThinking(label) },   // orb acts; "Checking Gmail…" surfaces
         )
         response = reply || '(done)'
         logger.chat('tool response', { chars: response.length, kind: intent.kind })
@@ -138,25 +138,23 @@ export function useChat({ addMessage, setPresenceState, setInputText, updateLast
       updateLastPikuMessage(response)  // final clean version
       logger.chat('response', { chars: response.length })
 
-      // ── Step 4: Display ───────────────────────────────────────────────────
-      setPresenceState('idle')
+      // ── Step 4: Reply shown — weave the turn into the World Model (orb: 'updating') ────────
+      // The reply is already on screen; this presence cue says "I'm filing this away".
+      setPresenceState('updating')
 
-      // ── Step 5: Post-response processing — fire-and-forget ────────────────
-      void memoryService
-        .processConversationTurn(trimmed, response)
-        .catch(err => logger.error('memory extraction failed', { error: String(err) }))
-
-      void summaryService
-        .onExchange(trimmed, response)
-        .catch(err => logger.error('summary tracking failed', { error: String(err) }))
-
-      void projectService
-        .processConversation(trimmed, response)
-        .catch(err => logger.error('project extraction failed', { error: String(err) }))
-
-      void graphService
-        .processConversation(trimmed, response)
-        .catch(err => logger.error('graph extraction failed', { error: String(err) }))
+      // ── Step 5: Post-response processing — fire-and-forget (Invariant 3). Not awaited on the
+      // critical path; we only attach a settle handler to drop the orb back to idle.
+      const post = [
+        memoryService.processConversationTurn(trimmed, response)
+          .catch(err => logger.error('memory extraction failed', { error: String(err) })),
+        summaryService.onExchange(trimmed, response)
+          .catch(err => logger.error('summary tracking failed', { error: String(err) })),
+        projectService.processConversation(trimmed, response)
+          .catch(err => logger.error('project extraction failed', { error: String(err) })),
+        graphService.processConversation(trimmed, response)
+          .catch(err => logger.error('graph extraction failed', { error: String(err) })),
+      ]
+      void Promise.allSettled(post).then(() => setPresenceState('idle'))
 
     } catch (err) {
       logger.error('sendMessage failed', { error: String(err) })

@@ -105,7 +105,7 @@ export function AgentScreen() {
         d => { setPhase('listening'); setLiveStatus(''); setLiveAnswer(p => p + d) },   // answer streams live → no dead gap
         history,
         isComplex,                       // think = true only for complex asks
-        label => { setLiveStatus(label); setPhase('listening') },   // "Checking Gmail…" the moment a tool fires
+        label => { setLiveStatus(label); setPhase('acting') },   // orb acts; "Checking Gmail…" the moment a tool fires
       )
       agentHub.setTrace(tr)
       agentHub.addTurn({ role: 'piku', text: reply || '(done)' })

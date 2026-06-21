@@ -116,7 +116,14 @@ export function ImmersiveChat({ presence, messages, inputText, isSending, onInpu
 }
 
 function statusLabel(p: PresenceState): string {
-  return p === 'thinking' ? 'thinking…' : p === 'listening' ? 'listening' : 'here with you'
+  switch (p) {
+    case 'thinking':  return 'thinking…'
+    case 'acting':    return 'working…'
+    case 'updating':  return 'remembering…'
+    case 'speaking':  return 'speaking…'
+    case 'listening': return 'listening'
+    default:          return 'here with you'
+  }
 }
 
 // ── A single turn ────────────────────────────────────────────────────────────
