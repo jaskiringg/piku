@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence }                     from 'framer-motion'
 import { useAppState }                        from '../../hooks/useAppState'
-import { useChat, useConversationPersistence } from '../chat'
+import { useChat }                            from '../chat'
 import { PIKU_SYSTEM_PROMPT }                 from '../chat/hooks/useChat'
+import { agentHub }                           from './screens/agentSession'
 import { ollamaService }                      from '../../services/OllamaService'
 import { voiceService }                       from '../../services/VoiceService'
 import { usePresenceCycle }                   from '../orb'
@@ -32,10 +33,27 @@ export function Shell() {
   const [voiceOn, setVoiceOn]     = useState(true)   // Piku speaks replies by default
   const [listening, setListening] = useState(false)
   const [speaking, setSpeaking]   = useState(false)
-  useConversationPersistence({ chatHistory, setChatHistory, isSending })
   // Pause the autonomous idle cycle whenever the loop owns presence — sending, speaking aloud, or
   // weaving the turn into memory (updating) — so those states aren't overwritten by the cycle.
   usePresenceCycle(setPresenceState, isSending || speaking || presenceState === 'updating')
+
+  // Home chat is backed by the SAME agentHub sessions as the Agent screen — one consistent model
+  // (agentHub also owns persistence to IDB v7, replacing the old conversations-store path).
+  // Re-render on hub changes; reload the visible history whenever the active session changes.
+  const [, forceHub] = useState(0)
+  useEffect(() => agentHub.subscribe(() => forceHub(n => n + 1)), [])
+  const activeSessionId = agentHub.active()?.id ?? null
+  const prevSessionId   = useRef<string | null>(activeSessionId)
+  useEffect(() => {
+    if (activeSessionId === prevSessionId.current || isSending) return   // don't clobber an active send
+    prevSessionId.current = activeSessionId
+    const turns = agentHub.active()?.turns ?? []
+    setChatHistory(turns.map(t => ({
+      id: crypto.randomUUID(),
+      sender: (t.role === 'you' ? 'user' : 'piku') as 'user' | 'piku',
+      text: t.text,
+    })))
+  }, [activeSessionId, isSending, setChatHistory])
 
   const [view, setView] = useState<NavKey>('home')
   const [focusGalaxyId, setFocusGalaxyId] = useState<string | null>(null)

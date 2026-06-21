@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Message, PresenceState } from '../../../types'
 import { NeuralBackground } from '../../overlay/components/NeuralBackground'
 import { Orb } from '../../orb'
+import { agentHub } from '../../os/screens/agentSession'
 import { ChatInput } from './ChatInput'
 
 interface Props {
@@ -61,6 +62,7 @@ export function ImmersiveChat({ presence, messages, inputText, isSending, onInpu
             <div className="text-[11px] text-cyan-300/60">{speaking ? 'speaking…' : statusLabel(presence)}</div>
           </div>
         </div>
+        <SessionBar />
         <div className="flex items-center gap-2">
           <button onClick={onToggleVoice} title={voiceOn ? 'Voice on — Piku speaks replies' : 'Voice off'}
             className={`flex items-center gap-1.5 rounded-full border px-2.5 h-8 text-[11px] transition-colors ${voiceOn ? 'border-cyan-400/40 text-cyan-200 bg-cyan-500/10' : 'border-white/10 text-white/40 hover:text-white/70'}`}>
@@ -112,6 +114,47 @@ export function ImmersiveChat({ presence, messages, inputText, isSending, onInpu
         </div>
       </div>
     </motion.div>
+  )
+}
+
+// Session switcher — the same agentHub sessions as the Agent screen, in a calm header pill so
+// Home chat is no longer one perpetual conversation. New / switch; Shell reloads history on change.
+function SessionBar() {
+  const [, force] = useState(0)
+  const [open, setOpen] = useState(false)
+  useEffect(() => agentHub.subscribe(() => force(n => n + 1)), [])
+  const sessions = agentHub.contexts
+  const active   = agentHub.active()
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 px-3 h-8 rounded-full border border-white/10 hover:border-cyan-400/30 text-[12px] text-white/65 hover:text-white/90 transition-colors max-w-[220px]">
+        <span className="text-cyan-300/70 text-[10px]">◆</span>
+        <span className="truncate">{active?.title || 'New session'}</span>
+        <span className="text-white/30 text-[10px]">▾</span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-10 z-50 w-64 py-1.5 rounded-xl bg-[#070b14]/95 backdrop-blur-2xl border border-white/10 shadow-[0_18px_50px_rgba(0,0,0,0.6)]">
+            <button onClick={() => { agentHub.createContext(); setOpen(false) }}
+              className="w-full text-left px-3 py-2 text-[12px] text-cyan-200 hover:bg-cyan-500/10 flex items-center gap-2">
+              <span className="text-cyan-300">＋</span> New session
+            </button>
+            <div className="h-px bg-white/8 my-1" />
+            <div className="max-h-64 overflow-y-auto">
+              {sessions.map(s => (
+                <button key={s.id} onClick={() => { agentHub.switchTo(s.id); setOpen(false) }}
+                  className={`w-full text-left px-3 py-1.5 text-[12px] flex items-center gap-2 ${s.id === active?.id ? 'text-white bg-white/[0.06]' : 'text-white/65 hover:bg-white/[0.04]'}`}>
+                  <span className="font-hud text-[9px] text-white/30 shrink-0">{s.turns.length}</span>
+                  <span className="truncate">{s.title}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

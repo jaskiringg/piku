@@ -8,6 +8,7 @@ import { graphService }                  from '../../graph'
 import { ollamaService }                 from '../../../services/OllamaService'
 import { toolRouter }                    from '../../../services/ToolRouter'
 import { classifyIntent }                from '../../../services/ReasoningPlanner'
+import { agentHub }                      from '../../os/screens/agentSession'
 import { logger }                        from '../../../lib/logger'
 import { PIKU_PERSONA }                  from '../../../lib/persona'
 
@@ -53,6 +54,10 @@ export function useChat({ addMessage, setPresenceState, setInputText, updateLast
     setIsSending(true)
     setInputText('')
     addMessage('user', trimmed)
+    // Home chat shares the Agent's session store (agentHub). Capture prior turns for memory,
+    // then record this turn — so Home and Agent are one consistent set of sessions.
+    const sessionHistory = agentHub.active()?.turns ?? []
+    agentHub.addTurn({ role: 'you', text: trimmed })
     logger.chat('send', { text: trimmed.slice(0, 80) })
     let streamingPlaceholderAdded = false
 
@@ -108,7 +113,7 @@ export function useChat({ addMessage, setPresenceState, setInputText, updateLast
           trimmed, toolSystem,
           (delta) => { thinkAcc += delta; updateLastPikuThinking(thinkAcc) },
           (delta) => { acc += delta; updateLastPikuMessage(acc) },
-          [],   // no prior history in Home ask bar (each ask is standalone for now)
+          sessionHistory,   // prior turns in this session → Piku remembers the conversation
           think,
           (label) => { setPresenceState('acting'); updateLastPikuThinking(label) },   // orb acts; "Checking Gmail…" surfaces
         )
@@ -118,9 +123,14 @@ export function useChat({ addMessage, setPresenceState, setInputText, updateLast
         // ── Plain chat path: fast, no tool overhead ────────────────────────
         let streamAccumulated   = ''
         let thinkingAccumulated = ''
+        const priorMsgs = sessionHistory.slice(-10).map(t => ({
+          role: (t.role === 'you' ? 'user' : 'assistant') as 'user' | 'assistant',
+          content: t.text,
+        }))
         const result = await ollamaService.chatStream(
           [
             { role: 'system', content: systemContent },
+            ...priorMsgs,
             { role: 'user',   content: trimmed        },
           ],
           (chunk) => {
@@ -137,6 +147,7 @@ export function useChat({ addMessage, setPresenceState, setInputText, updateLast
       }
       updateLastPikuMessage(response)  // final clean version
       logger.chat('response', { chars: response.length })
+      agentHub.addTurn({ role: 'piku', text: response })   // persist the reply into the shared session
 
       // ── Step 4: Reply shown — weave the turn into the World Model (orb: 'updating') ────────
       // The reply is already on screen; this presence cue says "I'm filing this away".
