@@ -136,19 +136,43 @@ export function AgentScreen() {
   return (
     <ScreenShell
       title="Agent"
-      subtitle="Your control hub. Each context is a separate chat — link it to a project, feed the World Model."
+      subtitle="Your control hub. Each session is a separate chat — link it to a project, feed the World Model."
     >
       <div className="grid grid-cols-12 gap-4" style={{ height: '74vh' }}>
 
-        {/* ── CONTEXTS RAIL ── */}
-        <Frame className="col-span-12 lg:col-span-3" label="Contexts" code={String(contexts.length).padStart(2, '0')}
-          action={
-            <button onClick={() => agentHub.createContext()}
-              className="font-hud text-[9.5px] uppercase tracking-[0.15em] text-cyan-200 hover:text-cyan-100 transition-colors flex items-center gap-1">
-              <span className="text-cyan-300 text-glow-cyan">＋</span> New
-            </button>
-          }>
+        {/* ── SESSIONS RAIL ── */}
+        <Frame className="col-span-12 lg:col-span-3" label="Sessions" code={String(contexts.length).padStart(2, '0')}>
           <div className="h-full overflow-y-auto px-2 py-2 flex flex-col gap-1">
+
+            {/* prominent new-session */}
+            <button onClick={() => agentHub.createContext()}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 mb-1 font-hud text-[10.5px] uppercase tracking-[0.18em] text-cyan-100 bg-cyan-500/12 hover:bg-cyan-500/20 transition-colors"
+              style={{ ...chamfer(8), boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.3)' }}>
+              <span className="text-cyan-300 text-glow-cyan text-[13px]">＋</span> New session
+            </button>
+
+            {/* Projects — start a session inside a project */}
+            {projects.length > 0 && (
+              <div className="mt-2">
+                <div className="font-hud text-[8.5px] uppercase tracking-[0.22em] text-fuchsia-200/55 px-2 pb-1.5 pt-1">Projects</div>
+                {projects.map(p => {
+                  const n = contexts.filter(c => c.projectId === p.id).length
+                  return (
+                    <button key={p.id} onClick={() => { agentHub.createContext(); agentHub.linkProject(p.id) }}
+                      title={`New session in ${p.name}`}
+                      className="group/p w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-fuchsia-500/[0.06] transition-colors">
+                      <span className="text-fuchsia-300/70 text-[10px] shrink-0">◆</span>
+                      <span className="flex-1 min-w-0 text-[12px] text-white/70 truncate group-hover/p:text-white/90">{p.name}</span>
+                      {n > 0 && <span className="font-hud text-[8.5px] text-white/30">{n}</span>}
+                      <span className="font-hud text-[10px] text-transparent group-hover/p:text-fuchsia-200/80 transition-colors">＋</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Sessions list */}
+            <div className="font-hud text-[8.5px] uppercase tracking-[0.22em] text-cyan-200/45 px-2 pb-1.5 pt-3">Recent</div>
             {contexts.map(c => {
               const active = c.id === ctx?.id
               const proj = c.projectId ? projects.find(p => p.id === c.projectId) : undefined
@@ -322,10 +346,10 @@ export function AgentScreen() {
       </div>
 
       <BuildStatus items={[
-        { label: 'Multi-context hub (new chats = new contexts)', state: 'built' },
-        { label: 'Contexts persisted to IndexedDB v7', state: 'built' },
-        { label: 'Link / create projects from a context', state: 'built' },
-        { label: 'Per-context World-Model graph view', state: 'planned' },
+        { label: 'Multi-session hub — new chats = new sessions', state: 'built' },
+        { label: 'Sessions persisted to IndexedDB v7', state: 'built' },
+        { label: 'Projects rail — start a session inside a project', state: 'built' },
+        { label: 'Per-session World-Model graph view', state: 'planned' },
       ]} />
     </ScreenShell>
   )
