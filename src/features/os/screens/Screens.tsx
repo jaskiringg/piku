@@ -608,24 +608,75 @@ export function FilesScreen() {
 }
 
 /* ───────────────────────── Calendar ───────────────────────── */
-export function CalendarScreen() {
-  const { events, loading } = useUpcomingEvents()
-  const [connecting, setConnecting] = useState(false)
-  const [calAccounts, setCalAccounts] = useState<number>(0)
 
-  useEffect(() => {
-    void (async () => {
-      try { setCalAccounts((await accountService.getByService('calendar')).filter(a => a.enabled && a.token).length) }
-      catch { /* ignore */ }
-    })()
-  }, [])
+const CAL_WORK_EMAIL    = 'work@example.com'
+const CAL_PERSONAL_EMAIL = 'personal@example.com'
+
+type CalAccountTag = 'work' | 'personal' | 'other'
+interface TaggedCalendarEvent extends CalendarEvent {
+  _accountTag: CalAccountTag
+  _accountEmail: string
+}
+type CalFilter = 'all' | 'work' | 'personal'
+
+function tagForEmail(email: string | undefined): CalAccountTag {
+  const e = (email ?? '').toLowerCase()
+  if (e === CAL_WORK_EMAIL) return 'work'
+  if (e === CAL_PERSONAL_EMAIL) return 'personal'
+  return 'other'
+}
+
+export function CalendarScreen() {
+  const [connecting, setConnecting] = useState(false)
+  const [calAccts, setCalAccts] = useState<import('../../../services/accounts').ServiceAccount[]>([])
+  const [taggedEvents, setTaggedEvents] = useState<TaggedCalendarEvent[] | null>(null)
+  const [loadingCal, setLoadingCal] = useState(false)
+  const [filter, setFilter] = useState<CalFilter>('all')
+
+  // Load accounts + fetch events per account (with 9s timeout each)
+  const loadAll = async (force = false) => {
+    try {
+      const accts = (await accountService.getByService('calendar')).filter(a => a.enabled && a.token)
+      setCalAccts(accts)
+      if (!accts.length) return
+      if (!force && taggedEvents !== null) return   // already loaded
+      setLoadingCal(true)
+      const { calendarConnector } = await import('../../../services/accounts')
+      const now = new Date()
+      const horizon = new Date(now.getTime() + 14 * 864e5)
+      const allTagged: TaggedCalendarEvent[] = []
+      await Promise.allSettled(accts.map(async acct => {
+        try {
+          const evs = await Promise.race([
+            calendarConnector.list(acct, now.toISOString(), horizon.toISOString(), 20),
+            new Promise<CalendarEvent[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 9000)),
+          ])
+          const tag = tagForEmail(acct.email)
+          for (const ev of evs) {
+            allTagged.push({ ...ev, _accountTag: tag, _accountEmail: acct.email ?? acct.label })
+          }
+        } catch { /* timeout or fetch error — skip this account */ }
+      }))
+      // Sort by start, then dedupe (same title + same start minute across accounts)
+      allTagged.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
+      const seen = new Set<string>()
+      const deduped = allTagged.filter(ev => {
+        const key = `${ev.title}::${ev.start.slice(0, 16)}`
+        if (seen.has(key)) return false
+        seen.add(key); return true
+      })
+      setTaggedEvents(deduped)
+    } catch { /* ignore */ }
+    finally { setLoadingCal(false) }
+  }
+
+  useEffect(() => { void loadAll() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const connect = async () => {
     setConnecting(true)
     try {
       const t = await connectGoogle()
       const lbl = t.email ? t.email.split('@')[0] : 'Calendar'
-      // upsert by email so reconnecting the same account updates instead of duplicating
       const existing = (await accountService.getByService('calendar')).find(a => a.email && t.email && a.email.toLowerCase() === t.email.toLowerCase())
       if (existing) {
         await accountService.save({ ...existing, label: lbl, token: t.accessToken, refreshToken: t.refreshToken ?? existing.refreshToken, tokenExpiresAt: t.expiresAt })
@@ -634,12 +685,24 @@ export function CalendarScreen() {
         await accountService.save({ ...acc, refreshToken: t.refreshToken, tokenExpiresAt: t.expiresAt })
       }
       void connectorFeed.refresh(true)
-    } catch { /* user cancelled or error — leave as-is */ }
+      await loadAll(true)
+    } catch { /* user cancelled or error */ }
     finally { setConnecting(false) }
   }
 
-  const byDay = new Map<string, { dateLabel: string; items: CalendarEvent[] }>()
-  for (const e of events?.events ?? []) {
+  const openGmail = async (email: string) => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('open_in_piku_chrome', { url: `https://mail.google.com/mail/u/?authuser=${email}` })
+    } catch { /* not in desktop app */ }
+  }
+
+  const visibleEvents = (taggedEvents ?? []).filter(ev =>
+    filter === 'all' || ev._accountTag === filter
+  )
+
+  const byDay = new Map<string, { dateLabel: string; items: TaggedCalendarEvent[] }>()
+  for (const e of visibleEvents) {
     const d = new Date(e.start)
     const key = d.toDateString()
     const dateLabel = d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })
@@ -647,9 +710,48 @@ export function CalendarScreen() {
     byDay.get(key)!.items.push(e)
   }
 
+  const hasWork     = calAccts.some(a => tagForEmail(a.email) === 'work')
+  const hasPersonal = calAccts.some(a => tagForEmail(a.email) === 'personal')
+
+  // Account filter + email peek toggle bar
+  const FilterBar = () => (
+    <div className="flex items-center gap-2 mb-4">
+      {(['all', 'work', 'personal'] as CalFilter[]).map(f => (
+        <button key={f} onClick={() => setFilter(f)}
+          className="font-hud text-[10px] uppercase tracking-[0.16em] px-3 py-1.5 transition-colors"
+          style={filter === f ? {
+            ...chamfer(6),
+            background: f === 'personal' ? 'rgba(217,70,239,0.14)' : 'rgba(34,211,238,0.14)',
+            boxShadow: `inset 0 0 0 1px ${f === 'personal' ? 'rgba(217,70,239,0.4)' : 'rgba(34,211,238,0.4)'}`,
+            color: f === 'personal' ? '#e879f9' : '#67e8f9',
+          } : { color: 'rgba(255,255,255,0.35)' }}>
+          {f}
+        </button>
+      ))}
+      <span className="flex-1" />
+      {/* Email peek buttons — open Gmail for each account */}
+      {hasWork && (
+        <button onClick={() => void openGmail(CAL_WORK_EMAIL)}
+          className="font-hud text-[9.5px] uppercase tracking-wider px-2.5 py-1 transition-colors hover:brightness-125"
+          style={{ ...chamfer(5), color: 'rgba(34,211,238,0.75)', boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.3)' }}
+          title={`Open Gmail for ${CAL_WORK_EMAIL}`}>
+          work mail ↗
+        </button>
+      )}
+      {hasPersonal && (
+        <button onClick={() => void openGmail(CAL_PERSONAL_EMAIL)}
+          className="font-hud text-[9.5px] uppercase tracking-wider px-2.5 py-1 transition-colors hover:brightness-125"
+          style={{ ...chamfer(5), color: 'rgba(217,70,239,0.75)', boxShadow: 'inset 0 0 0 1px rgba(217,70,239,0.3)' }}
+          title={`Open Gmail for ${CAL_PERSONAL_EMAIL}`}>
+          personal mail ↗
+        </button>
+      )}
+    </div>
+  )
+
   return (
-    <ScreenShell title="Calendar" subtitle="Your upcoming Google Calendar events — pulled live from connected accounts.">
-      {calAccounts === 0 ? (
+    <ScreenShell title="Calendar" subtitle="Your upcoming Google Calendar events — pulled live from all connected accounts.">
+      {calAccts.length === 0 ? (
         <Card className="col-span-12">
           <div className="py-8 text-center">
             <div className="text-sm text-white/70 mb-1">No Google Calendar connected</div>
@@ -661,42 +763,57 @@ export function CalendarScreen() {
             </button>
           </div>
         </Card>
-      ) : loading && !events ? (
-        <Card className="col-span-12"><Hint>loading calendar…</Hint></Card>
-      ) : !events || events.events.length === 0 ? (
-        <Card className="col-span-12"><Hint>Nothing on the calendar for the next 14 days.</Hint></Card>
       ) : (
         <Card className="col-span-12" title="Upcoming" action={
           <button onClick={connect} disabled={connecting} className="font-hud text-[10px] uppercase tracking-wider text-cyan-300/60 hover:text-cyan-200 disabled:opacity-40">+ Add account</button>
         }>
-          <div className="max-h-[560px] overflow-y-auto -mx-1 px-1">
-            {[...byDay.values()].map(group => (
-              <div key={group.dateLabel} className="mb-4 last:mb-0">
-                <div className="font-hud text-[9.5px] uppercase tracking-wider text-cyan-300/50 sticky top-0 bg-[#0a1120]/80 backdrop-blur-sm py-1.5 z-10">{group.dateLabel}</div>
-                {group.items.map(e => {
-                  const when = new Date(e.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-                  const end = new Date(e.end).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-                  return (
-                    <div key={e.id} className="flex items-start gap-3 py-2 border-b border-white/5 last:border-0">
-                      <div className="font-hud text-[11px] text-cyan-200/70 w-20 shrink-0 pt-0.5 tabular-nums">{when}{end && end !== when ? `–${end}` : ''}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[13px] text-white/85">{e.title}</div>
-                        {e.location && <div className="text-[11px] text-white/40 truncate">📍 {e.location}</div>}
-                        {e.attendees && e.attendees.length > 0 && <div className="text-[10px] text-white/30 truncate">{e.attendees.slice(0, 4).join(', ')}</div>}
-                        {e.meetLink && <a href={e.meetLink} target="_blank" rel="noreferrer" className="text-[10px] text-cyan-300/60 hover:text-cyan-200">Join meeting ↗</a>}
+          <FilterBar />
+          {loadingCal && taggedEvents === null ? (
+            <Hint>loading calendar…</Hint>
+          ) : visibleEvents.length === 0 ? (
+            <Hint>Nothing scheduled in the next 14 days{filter !== 'all' ? ` for ${filter}` : ''}.</Hint>
+          ) : (
+            <div className="max-h-[520px] overflow-y-auto -mx-1 px-1">
+              {[...byDay.values()].map(group => (
+                <div key={group.dateLabel} className="mb-4 last:mb-0">
+                  <div className="font-hud text-[9.5px] uppercase tracking-wider text-cyan-300/50 sticky top-0 bg-[#0a1120]/80 backdrop-blur-sm py-1.5 z-10">{group.dateLabel}</div>
+                  {group.items.map(e => {
+                    const isAllDay = !e.start.includes('T')
+                    const when = isAllDay ? 'all day' : new Date(e.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+                    const end  = isAllDay ? '' : new Date(e.end).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+                    const dotColor = e._accountTag === 'personal' ? 'rgb(217,70,239)' : e._accountTag === 'work' ? 'rgb(34,211,238)' : 'rgb(148,163,184)'
+                    const dotGlow  = e._accountTag === 'personal' ? 'rgba(217,70,239,0.6)' : e._accountTag === 'work' ? 'rgba(34,211,238,0.6)' : 'rgba(148,163,184,0.3)'
+                    return (
+                      <div key={`${e.id}::${e._accountTag}`} className="flex items-start gap-3 py-2 border-b border-white/5 last:border-0">
+                        {/* account dot */}
+                        <span className="mt-1.5 w-2 h-2 rounded-full shrink-0" style={{ background: dotColor, boxShadow: `0 0 5px ${dotGlow}` }} title={e._accountTag} />
+                        <div className="font-hud text-[11px] text-cyan-200/70 w-[4.5rem] shrink-0 pt-0.5 tabular-nums leading-tight">
+                          {when}{!isAllDay && end && end !== when ? `–${end}` : ''}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[13px] text-white/85 leading-snug">{e.title}</div>
+                          {e.location && <div className="text-[11px] text-white/40 truncate mt-0.5">{e.location}</div>}
+                          {e.attendees && e.attendees.length > 0 && <div className="text-[10px] text-white/30 truncate mt-0.5">{e.attendees.slice(0, 4).join(', ')}</div>}
+                          {e.meetLink && <a href={e.meetLink} target="_blank" rel="noreferrer" className="text-[10px] text-cyan-300/60 hover:text-cyan-200 mt-0.5 block">Join meeting ↗</a>}
+                        </div>
+                        {/* account chip */}
+                        <span className="font-hud text-[8.5px] uppercase tracking-wider shrink-0 px-1.5 py-0.5 mt-0.5"
+                          style={{ ...chamfer(4), color: dotColor, boxShadow: `inset 0 0 0 1px ${dotGlow}`, opacity: 0.85 }}>
+                          {e._accountTag}
+                        </span>
                       </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ))}
-          </div>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
       )}
       <BuildStatus items={[
         { label: 'Google Calendar (read-only, OAuth)', state: 'built' },
-        { label: 'Shared connector feed', state: 'built' },
-        { label: 'Agent calendar_check tool', state: 'built' },
+        { label: 'Multi-account fetch + merge + dedupe', state: 'built' },
+        { label: 'Account filter (All / Work / Personal)', state: 'built' },
         { label: 'Calendar → World Model graph', state: 'planned' },
       ]} />
     </ScreenShell>
@@ -780,7 +897,7 @@ export function PeopleScreen() {
 /* ───────────────────────── Settings ───────────────────────── */
 import { isOpencodeBrain, setOpencodeBrain } from '../../../features/chat/hooks/useChat'
 import { DB_VERSION } from '../../../features/memory/db'
-import { accountService, gitHubConnector, gmailConnector, connectGoogle, googleConfigured, useUpcomingEvents, connectorFeed } from '../../../services/accounts'
+import { accountService, gitHubConnector, gmailConnector, connectGoogle, googleConfigured, connectorFeed } from '../../../services/accounts'
 import type { ServiceAccount, ServiceType, MailSummary, CalendarEvent } from '../../../services/accounts'
 import { openWebWindow, WEB_APPS } from '../../../services/webwin'
 import { embedPanel, repositionEmbed, hideAllEmbeds } from '../../../services/embed'
