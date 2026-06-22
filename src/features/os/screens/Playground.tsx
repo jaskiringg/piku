@@ -46,7 +46,7 @@ function accentName(rgb: string): Accent {
 
 // ── Tile definitions — one per Piku feature ─────────────────────────────────
 
-interface TileDef { id: TileId; name: string; kind: 'dom' | 'embed'; accent: string }
+interface TileDef { id: TileId; name: string; kind: 'dom' | 'embed'; accent: string; embedUrl?: string; pgLabel?: string }
 const TILES: TileDef[] = [
   { id: 'inbox',     name: 'Inbox',         kind: 'dom',   accent: '217,70,239' },
   { id: 'calendar',  name: 'Calendar',      kind: 'dom',   accent: '34,211,238' },
@@ -56,9 +56,11 @@ const TILES: TileDef[] = [
   { id: 'graph',     name: 'World Model',    kind: 'dom',   accent: '34,211,238' },
   { id: 'agent',     name: 'Agent',          kind: 'dom',   accent: '217,70,239' },
   { id: 'models',    name: 'Models',         kind: 'dom',   accent: '34,211,238' },
-  { id: 'whatsapp',  name: 'WhatsApp',       kind: 'dom', accent: '255,255,255' },
-  { id: 'linkedin',  name: 'LinkedIn',       kind: 'dom', accent: '255,255,255' },
+  { id: 'whatsapp',  name: 'WhatsApp',       kind: 'embed', accent: '255,255,255', embedUrl: 'https://web.whatsapp.com',       pgLabel: 'pg-whatsapp' },
+  { id: 'linkedin',  name: 'LinkedIn',       kind: 'embed', accent: '255,255,255', embedUrl: 'https://www.linkedin.com/feed/', pgLabel: 'pg-linkedin' },
 ]
+// Tiles rendered as real Tauri child webviews (distinct pg- prefix keeps them separate from Canvas's embeds)
+const EMBED_TILES = TILES.filter(t => t.kind === 'embed') as Required<TileDef>[]
 
 function defaultLayout(): Record<TileId, Geom> {
   const row1y = 16
@@ -180,12 +182,87 @@ export function PlaygroundScreen() {
     setScrollPos(s => ({ x: s.x + e.deltaX, y: s.y + e.deltaY }))
   }
 
+  // ── Embedded web apps, INSIDE Piku (mirrors Canvas.tsx approach) ───────────
+  // WhatsApp/LinkedIn are real child webviews (Tauri webembed.rs) positioned over their tile bodies.
+  // Labels are prefixed 'pg-' to avoid collisions with Canvas's embeds ('whatsapp'/'linkedin').
+  // Native webviews paint above the DOM, so we park the tile being dragged/resized (placeholder stands in)
+  // and reposition/restore on drop. Scroll/pan changes require repositioning too.
+  const TITLEBAR_H = 38  // Playground titlebar height (px) — matches the h-[38px] in the JSX below
+  const tauriInvoke = async (cmd: string, args: Record<string, unknown>) => {
+    try { const { invoke } = await import('@tauri-apps/api/core'); return await invoke(cmd, args) } catch { return null }
+  }
+  // Compute a tile's on-screen body rect, accounting for scroll offset and the titlebar.
+  const rectOf = (id: TileId, g: Record<TileId, Geom>, scroll: { x: number; y: number }) => {
+    const sr = surfaceRef.current?.getBoundingClientRect(); if (!sr) return null
+    const gg = g[id]; if (!gg) return null
+    // sr.top is already after the header (mt-12 = 48px applied via CSS, but getBoundingClientRect gives exact px)
+    const screenX = sr.left + gg.x - scroll.x
+    const screenY = sr.top + gg.y - scroll.y + TITLEBAR_H
+    return { x: screenX, y: screenY, w: gg.w, h: Math.max(1, gg.h - TITLEBAR_H) }
+  }
+
+  // Initial mount: create/show every embed webview at its tile rect.
+  useEffect(() => {
+    for (const t of EMBED_TILES) {
+      const r = rectOf(t.id, geom, scrollPos)
+      if (!r) { void tauriInvoke('hide_embed', { label: t.pgLabel }); continue }
+      void tauriInvoke('embed_panel', { label: t.pgLabel, url: t.embedUrl, x: r.x, y: r.y, w: r.w, h: r.h })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])   // run once on mount (geom/scrollPos stable at mount; subsequent changes handled below)
+
+  // Reposition on geom / scroll changes (skip mid-gesture — drag parks the embed).
+  useEffect(() => {
+    if (interacting.current) return
+    for (const t of EMBED_TILES) {
+      const g = geom[t.id]
+      if (!g) continue
+      // If tile is collapsed, hide the embed (body is invisible)
+      if (g.collapsed) { void tauriInvoke('hide_embed', { label: t.pgLabel }); continue }
+      const r = rectOf(t.id, geom, scrollPos)
+      if (!r) { void tauriInvoke('hide_embed', { label: t.pgLabel }); continue }
+      void tauriInvoke('reposition_embed', { label: t.pgLabel, x: r.x, y: r.y, w: r.w, h: r.h })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geom, scrollPos])
+
+  // Park all embeds when leaving Playground.
+  useEffect(() => () => { void tauriInvoke('hide_all_embeds', {}) }, [])
+
+  // Wrap the drag/resize pointer-down so embed tiles are hidden while gesture is active.
+  const onTilePointerDown = (id: TileId, mode: 'drag' | 'resize') => (e: React.PointerEvent) => {
+    onPointerDown(id, mode)(e)
+    const meta = EMBED_TILES.find(t => t.id === id)
+    if (meta) void tauriInvoke('hide_embed', { label: meta.pgLabel })
+  }
+
+  // After a gesture ends, restore the embed at its new position.
+  const endGestureWithEmbed = () => {
+    const gst = gesture.current   // read before endGesture clears it
+    const embeddedId = gst && gst.mode !== 'pan' ? gst.id : null
+    endGesture()
+    if (embeddedId) {
+      const meta = EMBED_TILES.find(t => t.id === embeddedId)
+      if (meta) {
+        // geom has been updated by endGesture; schedule a reposition on next tick so state is settled
+        requestAnimationFrame(() => {
+          setGeom(g => {
+            const gg = g[embeddedId]; if (!gg || gg.collapsed) return g
+            const r = rectOf(embeddedId, g, scrollPos)
+            if (r) void tauriInvoke('reposition_embed', { label: meta.pgLabel, x: r.x, y: r.y, w: r.w, h: r.h })
+            return g  // no actual state mutation; just side-effect
+          })
+        })
+      }
+    }
+  }
+
   return (
     <div className="absolute inset-0 overflow-hidden"
       onPointerDown={onCanvasPointerDown}
       onPointerMove={onPointerMove}
-      onPointerUp={endGesture}
-      onPointerCancel={endGesture}>
+      onPointerUp={endGestureWithEmbed}
+      onPointerCancel={endGestureWithEmbed}>
 
       {/* ── Header bar ── */}
       <div className="absolute top-0 left-0 right-0 h-12 flex items-center justify-between px-6 z-30 pointer-events-none">
@@ -250,7 +327,7 @@ export function PlaygroundScreen() {
                 {/* ── Content ── */}
                 <div className="relative flex flex-col flex-1">
                   {/* ── Titlebar (drag handle) ── */}
-                  <div onPointerDown={onPointerDown(meta.id, 'drag')}
+                  <div onPointerDown={onTilePointerDown(meta.id, 'drag')}
                     className="h-[38px] shrink-0 flex items-center justify-between px-3 cursor-move select-none"
                     style={{ borderBottom: `1px solid rgba(${tileAccent},0.12)` }}>
                     <span className="font-hud text-[10px] uppercase tracking-[0.18em] text-white/55 flex items-center gap-2">
@@ -258,7 +335,26 @@ export function PlaygroundScreen() {
                       {meta.name}
                     </span>
                     <div className="flex items-center gap-1.5">
-                      <button onClick={() => setGeom(g => g && ({ ...g, [meta.id]: { ...g[meta.id], collapsed: !g[meta.id].collapsed } }))}
+                      <button onClick={() => {
+                        const willCollapse = !g.collapsed
+                        const embedMeta = EMBED_TILES.find(t => t.id === meta.id)
+                        if (embedMeta) {
+                          if (willCollapse) {
+                            void tauriInvoke('hide_embed', { label: embedMeta.pgLabel })
+                          } else {
+                            // Restore after expand — wait for the CSS height transition (150ms)
+                            setTimeout(() => {
+                              setGeom(cur => {
+                                const gg = cur[meta.id]; if (!gg) return cur
+                                const r = rectOf(meta.id, cur, scrollPos)
+                                if (r) void tauriInvoke('reposition_embed', { label: embedMeta.pgLabel, x: r.x, y: r.y, w: r.w, h: r.h })
+                                return cur
+                              })
+                            }, 200)
+                          }
+                        }
+                        setGeom(g2 => g2 && ({ ...g2, [meta.id]: { ...g2[meta.id], collapsed: willCollapse } }))
+                      }}
                         className="text-white/30 hover:text-white/60 text-[10px] w-5 h-5 flex items-center justify-center"
                         title={g.collapsed ? 'expand' : 'minimize'}>
                         {g.collapsed ? '▾' : '▴'}
@@ -276,7 +372,7 @@ export function PlaygroundScreen() {
 
                 {/* ── Resize handle ── */}
                 {!g.collapsed && (
-                  <div onPointerDown={onPointerDown(meta.id, 'resize')}
+                  <div onPointerDown={onTilePointerDown(meta.id, 'resize')}
                     className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize"
                     style={{ background: `linear-gradient(135deg, transparent 50%, rgba(${tileAccent},0.5) 50%)` }} />
                 )}
@@ -293,16 +389,12 @@ export function PlaygroundScreen() {
 
 // ── Tile bodies — each feature as a self-contained panel ────────────────────
 
-function LauncherTile({ name, url, accent }: { name: string; url: string; accent: string }) {
+// Placeholder shown BEHIND the live embedded webview — visible only while the embed is parked during a drag/resize.
+function EmbedPlaceholder({ name, accent }: { name: string; accent: string }) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6">
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 pointer-events-none">
       <span className="font-hud text-[13px] uppercase tracking-[0.25em]" style={{ color: `rgba(${accent},0.5)` }}>{name}</span>
-      <button onClick={() => openInChrome(url)}
-        className="font-hud text-[10px] uppercase tracking-wider px-3 py-1.5 transition-colors text-white/70 hover:text-white"
-        style={{ clipPath: 'polygon(0 0,calc(100% - 6px) 0,100% 6px,100% 100%,6px 100%,0 calc(100% - 6px))', background: 'rgba(255,255,255,0.03)', boxShadow: `inset 0 0 0 1px rgba(${accent},0.28)` }}>
-        Open in browser →
-      </button>
-      <span className="font-hud text-[9px] text-white/20 uppercase tracking-wider">opens your logged-in Chrome</span>
+      <span className="font-hud text-[9px] text-white/25 uppercase tracking-wider">loading · inside Piku</span>
     </div>
   )
 }
@@ -317,8 +409,10 @@ function TileBody({ id, persona, accent }: { id: TileId; persona: Persona; accen
     case 'graph':    return <GraphTile />
     case 'agent':    return <AgentTile />
     case 'models':   return <ModelsTile />
-    case 'whatsapp': return <LauncherTile name="WhatsApp" url="https://web.whatsapp.com" accent={accent} />
-    case 'linkedin': return <LauncherTile name="LinkedIn" url="https://www.linkedin.com/feed/" accent={accent} />
+    // Embed tiles (whatsapp/linkedin): the real webview is a Tauri child painted above this DOM.
+    // This placeholder is visible only while the tile is being dragged (embed is parked off-screen).
+    case 'whatsapp': return <EmbedPlaceholder name="WhatsApp" accent={accent} />
+    case 'linkedin': return <EmbedPlaceholder name="LinkedIn" accent={accent} />
     default:         return <div className="p-3 text-[11px] text-white/30 font-hud">tile</div>
   }
 }
