@@ -4,6 +4,7 @@ import type { Galaxy }                               from '../types'
 import { NODE_COLORS, DEFAULT_NODE_COLOR } from '../types'
 import { chamfer, CornerTicks }            from '../../os/Hud'
 import { GraphPanel }                      from './GraphPanel'
+import type { BrainGraphEntry }            from '../../../services/ProjectBrainService'
 
 // Force-directed knowledge graph as a cosmic void.
 // Renders a mock graph synchronously (never empty), then swaps in real data
@@ -108,6 +109,45 @@ function buildGraph(rawNodes: RawNode[], links: PLink[]): { nodes: PNode[]; link
   return { nodes, links }
 }
 
+// ── Brain graph normalization ──────────────────────────────────────────────
+//
+// graph.json written by ProjectBrainService.saveGraph has shape:
+//   { nodes: GraphNode[], edges: GraphEdge[] }
+// where GraphNode = { id, name, type, ... } and GraphEdge = { fromId, toId, ... }.
+// Map to our PNode/PLink types and run the same force layout.
+
+interface SavedBrainGraph {
+  nodes?: Array<{ id?: string; name?: string; type?: string; [k: string]: unknown }>
+  edges?: Array<{ fromId?: string; toId?: string; from?: string; to?: string; [k: string]: unknown }>
+}
+
+function normalizeBrainGraph(graph: unknown): { nodes: PNode[]; links: PLink[] } | null {
+  try {
+    const g = graph as SavedBrainGraph
+    if (!g || typeof g !== 'object') return null
+    const rawNodes = (g.nodes ?? [])
+      .filter(n => n && typeof n.id === 'string' && n.id)
+      .map(n => ({
+        id:   String(n.id ?? ''),
+        name: String(n.name ?? n.id ?? 'unknown'),
+        type: String(n.type ?? 'concept'),
+      }))
+    if (rawNodes.length === 0) return null
+    // Support both { fromId, toId } (GraphEdge) and { from, to } (PLink) shapes
+    const rawLinks: PLink[] = (g.edges ?? [])
+      .map(e => ({
+        from: String(e.fromId ?? e.from ?? ''),
+        to:   String(e.toId   ?? e.to   ?? ''),
+      }))
+      .filter(l => l.from && l.to)
+    const nodeIds = new Set(rawNodes.map(n => n.id))
+    const validLinks = rawLinks.filter(l => nodeIds.has(l.from) && nodeIds.has(l.to))
+    return buildGraph(rawNodes, validLinks)
+  } catch {
+    return null
+  }
+}
+
 // ── Star field ─────────────────────────────────────────────────────────────
 
 function buildStars(): { x: number; y: number; r: number; op: number }[] {
@@ -126,7 +166,13 @@ function buildStars(): { x: number; y: number; r: number; op: number }[] {
 // ── Component ─────────────────────────────────────────────────────────────
 
 export function GraphCanvas({ focusGalaxyId, onFocusHandled }: { focusGalaxyId?: string | null; onFocusHandled?: () => void }) {
-  const [graph, setGraph] = useState(() => buildGraph(MOCK_NODES, MOCK_LINKS))
+  const [worldGraph, setWorldGraph] = useState(() => buildGraph(MOCK_NODES, MOCK_LINKS))
+  const [activeBrain, setActiveBrain] = useState<BrainGraphEntry | null>(null)
+  const [brainGraph, setBrainGraph] = useState<{ nodes: PNode[]; links: PLink[] } | null>(null)
+
+  // The active rendering graph — brain if selected, world model otherwise
+  const graph = (activeBrain && brainGraph) ? brainGraph : worldGraph
+
   const [view, setView] = useState({ tx: 0, ty: 0, k: 0.62 })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -162,7 +208,7 @@ export function GraphCanvas({ focusGalaxyId, onFocusHandled }: { focusGalaxyId?:
         const raw: RawNode[] = allNodes.map(n => ({ id: n.id, name: n.name, type: n.type }))
         const confirmed = await graphService.getConfirmedEdges()
         const links: PLink[] = confirmed.map(e => ({ from: e.fromId, to: e.toId }))
-        setGraph(buildGraph(raw, links))
+        setWorldGraph(buildGraph(raw, links))
         const g = await graphService.getGalaxies()
         if (!cancelled) {
           setGalaxies(g)
@@ -172,6 +218,23 @@ export function GraphCanvas({ focusGalaxyId, onFocusHandled }: { focusGalaxyId?:
     })()
     return () => { cancelled = true }
   }, [])
+
+  // When activeBrain changes, normalize its graph and reset canvas state
+  useEffect(() => {
+    setSelectedId(null)
+    cancelAnimationFrame(pulseRaf.current)
+    pulseEdges.current = new Set()
+    pulseNbrs.current  = new Set()
+    pulseStart.current = 0
+
+    if (!activeBrain) {
+      setBrainGraph(null)
+      return
+    }
+    const normalized = normalizeBrainGraph(activeBrain.graph)
+    // If normalization fails, fall back to world model gracefully
+    setBrainGraph(normalized)
+  }, [activeBrain])
 
   // Fit view
   const fitView = useCallback(() => {
@@ -353,6 +416,27 @@ export function GraphCanvas({ focusGalaxyId, onFocusHandled }: { focusGalaxyId?:
 
       {/* ── HUD overlays ─────────────────────────────────────────────── */}
 
+      {/* Brain header badge — shown when a brain graph is active */}
+      {activeBrain && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2">
+          <div className="relative flex items-center gap-2.5 px-4 py-2 bg-[#0a1120]/85 backdrop-blur-xl"
+            style={{ ...chamfer(8), boxShadow: 'inset 0 0 0 1px rgba(96,165,250,0.35), 0 8px 30px -10px rgba(0,0,0,0.7)' }}>
+            <CornerTicks accent="cyan" />
+            <span className="font-hud text-[8px] uppercase tracking-[0.15em] text-blue-300/50">
+              {activeBrain.category.replace('s', '')}
+            </span>
+            <span className="font-hud text-[10px] text-white/70">{activeBrain.slug}</span>
+            <span className="font-hud text-[8px] text-white/25">·</span>
+            <span className="font-hud text-[8px] text-white/35">{activeBrain.nodeCount} nodes</span>
+            <button
+              onClick={() => setActiveBrain(null)}
+              className="font-hud text-[8px] uppercase tracking-[0.12em] text-blue-300/50 hover:text-blue-300/90 border border-blue-400/20 hover:border-blue-400/40 px-2 py-0.5 transition-colors ml-1">
+              ← World Model
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Search bar */}
       <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30">
         <div className="relative flex items-center gap-2 px-4 py-2 bg-[#0a1120]/80 backdrop-blur-xl"
@@ -407,7 +491,7 @@ export function GraphCanvas({ focusGalaxyId, onFocusHandled }: { focusGalaxyId?:
       </button>
 
       {/* Sample data badge */}
-      {isSample && (
+      {isSample && !activeBrain && (
         <div className="absolute bottom-6 right-6 z-40 font-hud text-[9px] uppercase tracking-[0.15em] text-cyan-400/40 bg-[#0a1120]/70 backdrop-blur-xl px-3 py-1.5"
           style={{ ...chamfer(6), boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.15)' }}>
           SAMPLE DATA · YOUR WORLD MODEL IS EMPTY
@@ -421,7 +505,9 @@ export function GraphCanvas({ focusGalaxyId, onFocusHandled }: { focusGalaxyId?:
         galaxies={galaxies}
         nodeCount={graph.nodes.length}
         edgeCount={graph.links.length}
-        nodeTypeCounts={nodeTypeCounts} />
+        nodeTypeCounts={nodeTypeCounts}
+        activeBrain={activeBrain}
+        onSelectBrain={setActiveBrain} />
     </div>
   )
 }
