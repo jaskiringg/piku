@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
-import { accountService, gitHubConnector } from '../../../services/accounts'
+import type { MailSummary } from '../../../services/accounts'
+import { accountService, gmailConnector, gitHubConnector } from '../../../services/accounts'
 
 // The Apps "chart paper": a freeform canvas of draggable + resizable panels, all INSIDE Piku.
 // Gmail + GitHub are native React panels scoped to the active persona (Office/Personal); WhatsApp +
@@ -66,6 +67,7 @@ export function CanvasScreen() {
   const [persona, setPersona] = useState<Persona>(() => (localStorage.getItem(LS_PERSONA) as Persona) || 'office')
   const [geom, setGeom] = useState<Record<PanelId, Geom> | null>(null)
   const [expanded, setExpanded] = useState<PanelId | null>(null)
+  const [focused, setFocused] = useState<PanelId | null>(null)   // the app you're "in" — only it captures two-finger scroll
   const [, force] = useReducer(n => n + 1, 0)
   const zTop = useRef(4)
   const interacting = useRef(false)
@@ -119,26 +121,26 @@ export function CanvasScreen() {
     const gg = exp === id ? { x: 8, y: 8, w: sr.width - 16, h: sr.height - 16 } : g[id]
     return { x: sr.left + gg.x, y: sr.top + gg.y + TITLEBAR, w: gg.w, h: Math.max(1, gg.h - TITLEBAR) }
   }
-  // create/navigate the embeds once geometry is known
+  // Only the FOCUSED embed is live (it captures two-finger scroll); every other embed is parked so the
+  // canvas pans freely and the panel below shows a clickable card. Click an app to focus it; release
+  // via its titlebar toggle. This is the fix for embeds trapping scroll.
   useEffect(() => {
     if (!geom) return
     for (const id of EMBED_IDS) {
-      const r = rectOf(id, geom, expanded)
-      const hidden = expanded != null && expanded !== id
-      if (hidden || !r) { void tauriInvoke('hide_embed', { label: id }); continue }
-      void tauriInvoke('embed_panel', { label: id, url: embedUrl(id), x: r.x, y: r.y, w: r.w, h: r.h })
+      if (id === focused) {
+        const r = rectOf(id, geom, expanded)
+        if (r) void tauriInvoke('embed_panel', { label: id, url: embedUrl(id), x: r.x, y: r.y, w: r.w, h: r.h })
+      } else {
+        void tauriInvoke('hide_embed', { label: id })
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [geom !== null])
-  // reposition on geometry / expand changes (skip mid-gesture — the drag handler parks them)
+  }, [focused])
+  // reposition the focused embed on geometry / expand changes (skip mid-gesture — drag parks it)
   useEffect(() => {
-    if (!geom || interacting.current) return
-    for (const id of EMBED_IDS) {
-      const r = rectOf(id, geom, expanded)
-      const hidden = expanded != null && expanded !== id
-      if (hidden || !r) { void tauriInvoke('hide_embed', { label: id }); continue }
-      void tauriInvoke('reposition_embed', { label: id, x: r.x, y: r.y, w: r.w, h: r.h })
-    }
+    if (!geom || !focused || interacting.current) return
+    const r = rectOf(focused, geom, expanded)
+    if (r) void tauriInvoke('reposition_embed', { label: focused, x: r.x, y: r.y, w: r.w, h: r.h })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [geom, expanded])
   // park every embed when leaving the Apps screen
@@ -154,7 +156,7 @@ export function CanvasScreen() {
     const gx = geom[id]
     gesture.current = { id, mode, px: e.clientX, py: e.clientY, ox: gx.x, oy: gx.y, ow: gx.w, oh: gx.h }
     interacting.current = true
-    if (EMBED_IDS.includes(id)) void tauriInvoke('hide_embed', { label: id })   // park the embed; placeholder shows while dragging
+    if (focused) void tauriInvoke('hide_embed', { label: focused })   // park the live embed during drag; reshown on drop
     bringToFront(id)
   }
   const onPointerMove = (e: React.PointerEvent) => {
@@ -235,14 +237,23 @@ export function CanvasScreen() {
                       style={{ boxShadow: `inset 0 0 0 1px rgba(${accent},0.3)` }}
                       title="Open the real, logged-in app docked here">⧉ real</button>
                   )}
+                  {EMBED_IDS.includes(meta.id) && (
+                    <button onClick={(e) => { e.stopPropagation(); setFocused(focused === meta.id ? null : meta.id) }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="font-hud text-[9px] uppercase tracking-wider px-1.5 py-0.5 transition-colors"
+                      style={focused === meta.id ? { color: `rgb(${accent})`, boxShadow: `inset 0 0 0 1px rgba(${accent},0.55)` } : { color: 'rgba(255,255,255,0.4)' }}
+                      title={focused === meta.id ? 'release — scroll the canvas freely' : 'enter — scroll inside this app'}>
+                      {focused === meta.id ? '◉ live' : '○ enter'}
+                    </button>
+                  )}
                   <button onClick={() => toggleExpand(meta.id)} className="text-white/40 hover:text-cyan-200 text-xs px-1" title={expanded === meta.id ? 'restore' : 'expand'}>{expanded === meta.id ? '▢' : '⤢'}</button>
                 </div>
               </div>
               {/* body */}
               <div className="flex-1 min-h-0 relative">
-                {meta.id === 'gmail' ? <GmailDockPrompt persona={persona} accent={accent} onOpen={() => void dockApp('gmail')} />
+                {meta.id === 'gmail' ? <GmailPanelBody persona={persona} accent={accent} onOpen={() => void dockApp('gmail')} />
                   : meta.id === 'github' ? <GitHubPanelBody persona={persona} />
-                  : <LauncherPanelBody name={meta.name} accent={accent} />}
+                  : <EmbedPanelBody name={meta.name} accent={accent} live={focused === meta.id} onEnter={() => setFocused(meta.id)} />}
               </div>
               {/* resize handle (bottom-right) */}
               {expanded !== meta.id && (
@@ -258,30 +269,89 @@ export function CanvasScreen() {
   )
 }
 
-// Gmail can't sign in inside an embedded webview (Google blocks it), so this clean prompt docks the
-// REAL logged-in Chrome Gmail into the panel via dock_chrome_app (Chrome CAN sign into Google).
-function GmailDockPrompt({ persona, accent, onOpen }: { persona: Persona; accent: string; onOpen: () => void }) {
+function mailTime(raw: string): string {
+  const d = new Date(raw); if (isNaN(d.getTime())) return ''
+  const now = new Date()
+  return d.toDateString() === now.toDateString()
+    ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+// Gmail can't sign in inside an embedded webview (Google blocks it), so the panel shows the real
+// inbox — UNREAD + IMPORTANT — via the API, with a shortcut (⧉) to dock the full logged-in Chrome
+// Gmail when you need to compose. Best of both: glance in place, full app on click.
+function GmailPanelBody({ persona, accent, onOpen }: { persona: Persona; accent: string; onOpen: () => void }) {
+  const [mail, setMail] = useState<MailSummary[] | null>(null)
+  const [missing, setMissing] = useState(false)
+  useEffect(() => {
+    let c = false; setMail(null); setMissing(false)
+    void (async () => {
+      const accts = await accountService.getByService('email')
+      const a = accts.find(x => (x.email ?? '').toLowerCase() === EMAIL[persona])
+      if (!a || !a.token) { if (!c) setMissing(true); return }
+      try {
+        const m = await Promise.race([
+          gmailConnector.search(a, 'in:inbox (is:unread OR is:important) newer_than:21d', 40),
+          new Promise<MailSummary[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 9000)),
+        ])
+        if (!c) setMail(m)
+      } catch { if (!c) setMail([]) }
+    })()
+    return () => { c = true }
+  }, [persona])
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
-      <span className="font-hud text-[13px] uppercase tracking-[0.22em]" style={{ color: `rgba(${accent},0.6)` }}>Gmail · {persona}</span>
-      <span className="text-[11.5px] text-white/45 leading-relaxed max-w-[250px]">Google won't allow sign-in inside an embedded view — so open your real, logged-in Gmail docked right here:</span>
-      <button onClick={onOpen}
-        className="font-hud text-[11px] uppercase tracking-wider px-4 py-2 transition-colors hover:brightness-125"
-        style={{ color: `rgba(${accent},0.9)`, boxShadow: `inset 0 0 0 1px rgba(${accent},0.45)` }}>
-        ⧉ Open real Gmail here →
-      </button>
-      <span className="font-hud text-[8.5px] text-white/25 uppercase tracking-wider">{EMAIL[persona]}</span>
+    <div className="absolute inset-0 flex flex-col">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/[0.06] shrink-0">
+        <span className="font-hud text-[10px] uppercase tracking-wider text-white/35">unread &amp; important{mail ? ` · ${mail.length}` : ''}</span>
+        <button onClick={onOpen}
+          className="font-hud text-[10px] uppercase tracking-wider px-1.5 py-0.5 transition-colors hover:brightness-125"
+          style={{ color: `rgba(${accent},0.85)`, boxShadow: `inset 0 0 0 1px rgba(${accent},0.35)` }}>
+          ⧉ open gmail →
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-2.5 py-1">
+        {missing ? <div className="text-[11px] text-amber-300/60 p-2">No {persona} Gmail connected — add {EMAIL[persona]} in Settings → Gmail.</div>
+          : mail === null ? <div className="text-[11px] text-white/30 p-2 font-hud">loading inbox…</div>
+          : mail.length === 0 ? <div className="text-[11px] text-white/35 p-2">all caught up — nothing unread or important.</div>
+          : mail.map(m => {
+            const name = (m.from.replace(/<.*>/, '').replace(/"/g, '').trim() || m.from).slice(0, 38)
+            return (
+              <div key={m.id} onClick={onOpen}
+                className="flex items-start gap-2.5 py-1.5 border-b border-white/[0.04] cursor-pointer hover:bg-white/[0.03] px-1">
+                <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${m.unread ? '' : 'opacity-0'}`}
+                  style={{ background: `rgb(${accent})`, boxShadow: m.unread ? `0 0 6px rgba(${accent},0.7)` : 'none' }} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`text-[12px] truncate ${m.unread ? 'text-white' : 'text-white/65'}`}>{name}</span>
+                    <span className="text-[9.5px] text-white/30 shrink-0 font-hud">{mailTime(m.date)}</span>
+                  </div>
+                  <div className={`text-[11.5px] truncate ${m.unread ? 'text-white/80' : 'text-white/45'}`}>{m.subject}</div>
+                  <div className="text-[10.5px] text-white/30 truncate">{m.snippet}</div>
+                </div>
+              </div>
+            )
+          })}
+      </div>
     </div>
   )
 }
 
-// Placeholder shown BEHIND the embedded webview (visible only while dragging, when the embed is parked).
-function LauncherPanelBody({ name, accent }: { name: string; accent: string }) {
+// Embed body: when NOT focused, a clickable card (click → focus → the real webview appears on top and
+// captures scroll). When focused, the webview paints over this; we only peek at the bottom edge.
+function EmbedPanelBody({ name, accent, live, onEnter }: { name: string; accent: string; live: boolean; onEnter: () => void }) {
+  if (live) {
+    return (
+      <div className="absolute inset-0 flex items-end justify-center pb-1.5 pointer-events-none">
+        <span className="font-hud text-[8px] uppercase tracking-wider text-white/20">live · scroll works in {name} · ◉ in titlebar to release</span>
+      </div>
+    )
+  }
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6">
-      <span className="font-hud text-[13px] uppercase tracking-[0.25em]" style={{ color: `rgba(${accent},0.5)` }}>{name}</span>
-      <span className="font-hud text-[9px] text-white/25 uppercase tracking-wider">embedded · inside Piku</span>
-    </div>
+    <button onClick={onEnter} className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6">
+      <span className="font-hud text-[13px] uppercase tracking-[0.25em]" style={{ color: `rgba(${accent},0.55)` }}>{name}</span>
+      <span className="font-hud text-[9.5px] uppercase tracking-wider px-3 py-1.5" style={{ color: `rgba(${accent},0.85)`, boxShadow: `inset 0 0 0 1px rgba(${accent},0.3)` }}>click to open →</span>
+      <span className="font-hud text-[8px] text-white/25 uppercase tracking-wider">then scroll / click inside {name}</span>
+    </button>
   )
 }
 
