@@ -506,9 +506,10 @@ function AgentTile() {
     try {
       const { PIKU_PERSONA } = await import('../../../lib/persona')
       const sys = `${PIKU_PERSONA}\n\nYou have a continuous memory of this person across conversations.`
+      const prior = history.map(m => ({ role: m.role === 'you' ? 'user' as const : 'assistant' as const, content: m.text }))
       let acc = ''
       await ollamaService.chatStream(
-        [{ role: 'system', content: sys }, { role: 'user', content: t }],
+        [{ role: 'system', content: sys }, ...prior, { role: 'user', content: t }],
         (chunk) => { acc += chunk; setLive(acc) },
         undefined, 0.7, 240_000, false,
       )
