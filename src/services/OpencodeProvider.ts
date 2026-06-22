@@ -113,43 +113,86 @@ class OpencodeProvider {
     const text  = convo ? `Conversation so far:\n${convo}\n\nUser: ${user}` : user
 
     const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 120_000)
+    // Hard wall: abort the SSE connection if the whole turn takes > 120 s.
+    const hardTimer = setTimeout(() => ctrl.abort(), 120_000)
     try {
       // Open the event stream BEFORE firing the prompt so no deltas are missed.
       const evRes = await fetch(`${OPENCODE_BASE}/event`, { signal: ctrl.signal })
       if (!evRes.ok || !evRes.body) throw new Error(`opencode event ${evRes.status}`)
 
-      await fetch(`${OPENCODE_BASE}/session/${id}/prompt_async`, {
+      const promptRes = await fetch(`${OPENCODE_BASE}/session/${id}/prompt_async`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ model: OPENCODE_MODEL, system, parts: [{ type: 'text', text }] }),
+        signal: AbortSignal.timeout(15_000),
       })
+      if (!promptRes.ok) throw new Error(`opencode prompt_async ${promptRes.status}`)
 
       const reader = evRes.body.getReader()
       const dec = new TextDecoder()
       let buf = '', answer = ''
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buf += dec.decode(value, { stream: true })
-        const lines = buf.split('\n'); buf = lines.pop() ?? ''
-        for (const line of lines) {
-          if (!line.startsWith('data:')) continue
-          let ev: any
-          try { ev = JSON.parse(line.slice(5).trim()) } catch { continue }
-          const p = ev?.properties
-          if (!p || p.sessionID !== id) continue
-          if (ev.type === 'message.part.delta') {
-            if (p.field === 'reasoning') onThinking?.(p.delta ?? '')
-            else if (p.field === 'text') { answer += p.delta ?? ''; onContent?.(p.delta ?? '') }
-          } else if (ev.type === 'session.idle') {
-            void reader.cancel()
-            return answer.replace(/<\/?think>/gi, '').trim()
+
+      // Idle-timeout watchdog: if no new delta arrives for 7 s after the first token we've
+      // received some output, resolve with what we have rather than hanging forever.  This
+      // fires if the model finishes but the server never sends session.idle.
+      let lastDeltaAt = 0          // 0 = no delta yet; we only arm the watchdog after the first token
+      let idleTimer: ReturnType<typeof setTimeout> | null = null
+      const IDLE_TIMEOUT_MS = 7_000
+
+      const resolveEarly = (resolve: (v: string) => void) => {
+        const result = answer.replace(/<\/?think>/gi, '').trim()
+        void reader.cancel().catch(() => {})
+        resolve(result)
+      }
+
+      // Wrap the reader loop in a Promise so the idle watchdog can resolve it externally.
+      const loopResult = await new Promise<string>((resolve, reject) => {
+        const armIdle = () => {
+          if (idleTimer) clearTimeout(idleTimer)
+          idleTimer = setTimeout(() => resolveEarly(resolve), IDLE_TIMEOUT_MS)
+        }
+
+        const readLoop = async () => {
+          try {
+            while (true) {
+              const { value, done } = await reader.read()
+              if (done) { resolve(answer.replace(/<\/?think>/gi, '').trim()); break }
+              buf += dec.decode(value, { stream: true })
+              const lines = buf.split('\n'); buf = lines.pop() ?? ''
+              for (const line of lines) {
+                if (!line.startsWith('data:')) continue
+                let ev: any
+                try { ev = JSON.parse(line.slice(5).trim()) } catch { continue }
+                const p = ev?.properties
+                if (!p || p.sessionID !== id) continue
+                if (ev.type === 'message.part.delta') {
+                  const delta: string = p.delta ?? ''
+                  if (p.field === 'reasoning') { onThinking?.(delta) }
+                  else if (p.field === 'text') { answer += delta; onContent?.(delta) }
+                  // Arm/reset the idle watchdog on every delta — only after the first token.
+                  if (delta) { lastDeltaAt = Date.now(); armIdle() }
+                } else if (ev.type === 'session.idle' || ev.type === 'message.completed' || ev.type === 'done') {
+                  if (idleTimer) clearTimeout(idleTimer)
+                  void reader.cancel().catch(() => {})
+                  resolve(answer.replace(/<\/?think>/gi, '').trim())
+                  return
+                }
+              }
+            }
+          } catch (err) {
+            if (idleTimer) clearTimeout(idleTimer)
+            // If we already have an answer (stream closed after content), resolve; otherwise reject.
+            if (answer && lastDeltaAt > 0) resolve(answer.replace(/<\/?think>/gi, '').trim())
+            else reject(err instanceof Error ? err : new Error(String(err)))
           }
         }
-      }
-      return answer.replace(/<\/?think>/gi, '').trim()
+        void readLoop()
+      })
+
+      if (idleTimer) clearTimeout(idleTimer)
+      void lastDeltaAt // suppress unused-variable lint (read above in armIdle closure)
+      return loopResult
     } finally {
-      clearTimeout(timer)
+      clearTimeout(hardTimer)
     }
   }
 }

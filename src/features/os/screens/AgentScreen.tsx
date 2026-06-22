@@ -186,10 +186,14 @@ export function AgentScreen() {
         const brainSlug = toSlug(
           linkedProject?.name ?? ctx?.title ?? 'untitled'
         )
-        // Load brain context and prepend to system prompt for project mode
+        // Load brain context and prepend to system prompt for project mode.
+        // Race against a 4 s timeout so a slow/hung vault read can never block the turn.
         let brainAddon = ''
         if (activeMode === 'project' && brainCategory && brainSlug) {
-          brainAddon = await projectBrainService.load(brainCategory, brainSlug).catch(() => '')
+          brainAddon = await Promise.race([
+            projectBrainService.load(brainCategory, brainSlug).catch(() => ''),
+            new Promise<string>(res => setTimeout(() => res(''), 4_000)),
+          ])
         }
 
         const asm = await assembleMode(activeMode, { message: msg, linkedProject })
@@ -399,8 +403,10 @@ export function AgentScreen() {
               )}
             </div>
 
-            {/* transcript */}
-            <div className="flex-1 overflow-y-auto px-5 min-h-0">
+            {/* transcript — transform+isolation force a stable GPU compositing layer in WKWebView,
+                preventing the fuchsia/magenta rectangle artifact that appears during streaming repaints. */}
+            <div className="flex-1 overflow-y-auto px-5 min-h-0"
+              style={{ transform: 'translateZ(0)', willChange: 'transform', isolation: 'isolate' }}>
               {turns.length === 0 ? (
                 <div className="text-center mt-1">
                   <p className="text-white/45 text-[13px]">Talk to me, or ask me to do something on your Mac.</p>
@@ -423,9 +429,11 @@ export function AgentScreen() {
                         style={t.role === 'you' ? { clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))', boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.18)' } : undefined}>{t.text}</div>
                     </div>
                   ))}
-                  {/* live reply — streams in token-by-token so there's no dead loading gap */}
+                  {/* live reply — streams in token-by-token so there's no dead loading gap.
+                      translateZ(0) + willChange give this rapidly-repainting node its own GPU layer so
+                      WKWebView doesn't composite it with the fuchsia Frame gradient behind it. */}
                   {running && (liveAnswer
-                    ? <div className="flex justify-start"><div className="max-w-[85%] text-[14px] leading-relaxed text-white/85 whitespace-pre-wrap">{liveAnswer}<span className="animate-blink text-cyan-300 ml-0.5">▋</span></div></div>
+                    ? <div className="flex justify-start"><div className="max-w-[85%] text-[14px] leading-relaxed text-white/85 whitespace-pre-wrap" style={{ transform: 'translateZ(0)', willChange: 'transform' }}>{liveAnswer}<span className="animate-blink text-cyan-300 ml-0.5">▋</span></div></div>
                     : <div className="flex justify-start"><div className="flex items-center gap-2 text-cyan-300/70 px-1">
                         <span className="flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/70 animate-pulse" />
