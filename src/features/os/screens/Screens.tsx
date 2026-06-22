@@ -11,6 +11,7 @@ import { opencodeProvider, OPENCODE_MODEL } from '../../../services/OpencodeProv
 import { AgentScreen } from './AgentScreen'
 import { CanvasScreen } from './Canvas'
 import { PlaygroundScreen } from './Playground'
+import { AutomationsScreen } from './Automations'
 
 const AddBtn = ({ label }: { label: string }) => (
   <button className="text-[12px] text-cyan-200 bg-cyan-500/12 hover:bg-cyan-500/20 border border-cyan-400/20 rounded-xl px-3 py-1.5 transition-colors">{label}</button>
@@ -1180,15 +1181,16 @@ export function SettingsScreen() {
 
 /* ───────────────────────── Router map ───────────────────────── */
 export const SCREENS: Partial<Record<NavKey, FC>> = {
-  agent:     AgentScreen,
-  models:    ModelsScreen,
-  projects:  ProjectsScreen,
-  datasets:  DatasetsScreen,
-  apps:      CanvasScreen,
-  work:      WorkScreen,
-  files:     FilesScreen,
-  calendar:  CalendarScreen,
-  people:    PeopleScreen,
-  playground: PlaygroundScreen,
-  settings:  SettingsScreen,
+  agent:       AgentScreen,
+  models:      ModelsScreen,
+  projects:    ProjectsScreen,
+  datasets:    DatasetsScreen,
+  apps:        CanvasScreen,
+  work:        WorkScreen,
+  files:       FilesScreen,
+  calendar:    CalendarScreen,
+  people:      PeopleScreen,
+  playground:  PlaygroundScreen,
+  automations: AutomationsScreen,
+  settings:    SettingsScreen,
 }

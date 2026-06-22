@@ -2,7 +2,7 @@ import { ACTIVE_BRAIN } from '../../services/OllamaService'
 
 export type NavKey =
   | 'home' | 'agent' | 'models' | 'projects' | 'knowledge' | 'datasets'
-  | 'apps' | 'work' | 'files' | 'calendar' | 'people' | 'playground' | 'settings'
+  | 'apps' | 'work' | 'files' | 'calendar' | 'people' | 'playground' | 'automations' | 'settings'
 
 const ITEMS: { key: NavKey; label: string; glyph: string }[] = [
   { key: 'home',      label: 'Home',      glyph: '⌂' },
@@ -16,8 +16,9 @@ const ITEMS: { key: NavKey; label: string; glyph: string }[] = [
   { key: 'files',     label: 'Files',     glyph: '▭' },
   { key: 'calendar',  label: 'Calendar',  glyph: '◷' },
   { key: 'people',    label: 'People',    glyph: '◍' },
-  { key: 'playground', label: 'Playground', glyph: '⬡' },
-  { key: 'settings',  label: 'Settings',  glyph: '⚙' },
+  { key: 'playground',   label: 'Playground',   glyph: '⬡' },
+  { key: 'automations',  label: 'Automations',  glyph: '⚡' },
+  { key: 'settings',     label: 'Settings',     glyph: '⚙' },
 ]
 
 const NOTCH = 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px))'
