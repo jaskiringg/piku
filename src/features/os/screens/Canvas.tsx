@@ -272,29 +272,48 @@ function mailTime(raw: string): string {
 // Gmail can't sign in inside an embedded webview (Google blocks it), so the panel shows the real
 // inbox — UNREAD + IMPORTANT — via the API, with a shortcut (⧉) to dock the full logged-in Chrome
 // Gmail when you need to compose. Best of both: glance in place, full app on click.
+//
+// Fetch strategy (robust against empty + slow):
+//   1. Try "in:inbox (is:unread OR is:important) newer_than:21d" (max 15 msgs, labeled "unread & important").
+//   2. If that returns 0 results, fall back to "in:inbox newer_than:7d" (max 15, labeled "recent").
+//      This ensures the panel always shows something useful even when there's nothing unread/important.
+//   3. Both paths share the 9-second timeout. Max=15 keeps serial per-message fetches within budget.
 function GmailPanelBody({ persona, accent, onOpen }: { persona: Persona; accent: string; onOpen: () => void }) {
   const [mail, setMail] = useState<MailSummary[] | null>(null)
   const [missing, setMissing] = useState(false)
+  const [mode, setMode] = useState<'priority' | 'recent'>('priority')
   useEffect(() => {
-    let c = false; setMail(null); setMissing(false)
+    let c = false; setMail(null); setMissing(false); setMode('priority')
     void (async () => {
       const accts = await accountService.getByService('email')
       const a = accts.find(x => (x.email ?? '').toLowerCase() === EMAIL[persona])
       if (!a || !a.token) { if (!c) setMissing(true); return }
       try {
-        const m = await Promise.race([
-          gmailConnector.search(a, 'in:inbox (is:unread OR is:important) newer_than:21d', 40),
+        // Primary: unread or important in the last 21 days. Max=15 keeps per-message serial HTTP
+        // calls within the 9s budget (Gmail API doesn't support bulk metadata in one shot).
+        const primary = await Promise.race([
+          gmailConnector.search(a, 'in:inbox (is:unread OR is:important) newer_than:21d', 15),
           new Promise<MailSummary[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 9000)),
         ])
-        if (!c) setMail(m)
+        if (c) return
+        if (primary.length > 0) {
+          setMail(primary); setMode('priority'); return
+        }
+        // Fallback: primary returned nothing — show recent inbox so the panel isn't empty.
+        const recent = await Promise.race([
+          gmailConnector.search(a, 'in:inbox newer_than:7d', 15),
+          new Promise<MailSummary[]>((_, rej) => setTimeout(() => rej(new Error('timeout')), 9000)),
+        ])
+        if (!c) { setMail(recent); setMode('recent') }
       } catch { if (!c) setMail([]) }
     })()
     return () => { c = true }
   }, [persona])
+  const sectionLabel = mode === 'priority' ? `unread & important${mail ? ` · ${mail.length}` : ''}` : `recent inbox${mail ? ` · ${mail.length}` : ''}`
   return (
     <div className="absolute inset-0 flex flex-col">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/[0.06] shrink-0">
-        <span className="font-hud text-[10px] uppercase tracking-wider text-white/35">unread &amp; important{mail ? ` · ${mail.length}` : ''}</span>
+        <span className="font-hud text-[10px] uppercase tracking-wider text-white/35">{sectionLabel}</span>
         <button onClick={onOpen}
           className="font-hud text-[10px] uppercase tracking-wider px-1.5 py-0.5 transition-colors hover:brightness-125"
           style={{ color: `rgba(${accent},0.85)`, boxShadow: `inset 0 0 0 1px rgba(${accent},0.35)` }}>
@@ -304,7 +323,7 @@ function GmailPanelBody({ persona, accent, onOpen }: { persona: Persona; accent:
       <div className="flex-1 overflow-y-auto px-2.5 py-1">
         {missing ? <div className="text-[11px] text-amber-300/60 p-2">No {persona} Gmail connected — add {EMAIL[persona]} in Settings → Gmail.</div>
           : mail === null ? <div className="text-[11px] text-white/30 p-2 font-hud">loading inbox…</div>
-          : mail.length === 0 ? <div className="text-[11px] text-white/35 p-2">all caught up — nothing unread or important.</div>
+          : mail.length === 0 ? <div className="text-[11px] text-white/35 p-2">inbox is empty.</div>
           : mail.map(m => {
             const name = (m.from.replace(/<.*>/, '').replace(/"/g, '').trim() || m.from).slice(0, 38)
             return (
