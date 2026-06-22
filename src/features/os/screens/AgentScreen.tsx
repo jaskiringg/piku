@@ -15,6 +15,7 @@ import type { ReasoningFlow } from '../../../services/ReasoningPlanner'
 import { opencodeProvider } from '../../../services/OpencodeProvider'
 import { detectMode, assembleMode, handoffToExternal, MODES } from '../../../services/modes/Modes'
 import type { Mode } from '../../../services/modes/Modes'
+import { projectBrainService, modeToCategory, toSlug } from '../../../services/ProjectBrainService'
 import { MemoryService, ConversationSummaryService } from '../../memory'
 import { graphService } from '../../graph'
 
@@ -180,17 +181,57 @@ export function AgentScreen() {
         if (intent.kind === 'tool') await runTools(AGENT_SYSTEM_PROMPT, true)
         else                        await runBrain(AGENT_SYSTEM_PROMPT, msg, history)
       } else {
+        // Derive brain slug from linked project name → session title → 'untitled'
+        const brainCategory = modeToCategory(activeMode)
+        const brainSlug = toSlug(
+          linkedProject?.name ?? ctx?.title ?? 'untitled'
+        )
+        // Load brain context and prepend to system prompt for project mode
+        let brainAddon = ''
+        if (activeMode === 'project' && brainCategory && brainSlug) {
+          brainAddon = await projectBrainService.load(brainCategory, brainSlug).catch(() => '')
+        }
+
         const asm = await assembleMode(activeMode, { message: msg, linkedProject })
         if (asm.note) setLiveStatus(asm.note)
         // Always paint the mode's approach flow so the template is visible while Piku works.
         if (asm.flow) setFlow({ simple: false, understand: asm.flow.understand, plan: asm.flow.plan })
+
+        const systemWithBrain = brainAddon
+          ? AGENT_SYSTEM_PROMPT + '\n\n' + brainAddon + '\n\n' + asm.systemAddon
+          : AGENT_SYSTEM_PROMPT + '\n\n' + asm.systemAddon
+
         if (asm.handoff) {
           await handoffToExternal(asm.handoff, msg)
           agentHub.addTurn({ role: 'piku', text: `Opened ${asm.handoff.name} and copied your prompt to the clipboard — paste it there to continue the brainstorm.` })
         } else if (asm.useTools) {
-          await runTools(AGENT_SYSTEM_PROMPT + '\n\n' + asm.systemAddon, true)
+          await runTools(systemWithBrain, true)
         } else {
-          await runBrain(AGENT_SYSTEM_PROMPT + '\n\n' + asm.systemAddon, msg, history)
+          await runBrain(systemWithBrain, msg, history)
+        }
+
+        // Fire-and-forget: persist turn + graph + gdd to the vault (non-blocking, best-effort)
+        if (brainCategory && brainSlug) {
+          const pikuTurns = agentHub.active()?.turns.filter(t => t.role === 'piku') ?? []
+          const pikulReply = pikuTurns[pikuTurns.length - 1]?.text ?? ''
+          const sessionTitle = linkedProject?.name ?? ctx?.title ?? 'Untitled'
+          void (async () => {
+            try {
+              await graphService.getProjectSubgraph(linkedProject?.id ?? '').then(sub => {
+                if (sub) void projectBrainService.saveGraph(brainCategory, brainSlug, sub).catch(() => {})
+              }).catch(() => {
+                // No project subgraph — save full graph instead
+                void Promise.all([
+                  graphService.getAllNodes(),
+                  graphService.getConfirmedEdges(),
+                ]).then(([nodes, edges]) =>
+                  projectBrainService.saveGraph(brainCategory, brainSlug, { nodes, edges })
+                ).catch(() => {})
+              })
+            } catch { /* best-effort */ }
+            void projectBrainService.saveTurn(brainCategory, brainSlug, msg, pikulReply).catch(() => {})
+            void projectBrainService.updateGdd(brainCategory, brainSlug, sessionTitle, msg.slice(0, 120)).catch(() => {})
+          })()
         }
       }
     } catch (e) {
