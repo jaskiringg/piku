@@ -1,4 +1,5 @@
 import { logger } from '../lib/logger'
+import { stripThinkingTokens } from '../lib/stripUtils'
 
 const OLLAMA_BASE    = 'http://localhost:11434'
 const CHAT_MODEL     = 'qwen3:4b'   // 4B fits a 16GB M4 comfortably + keeps thinking mode.
@@ -418,12 +419,6 @@ export { EXTRACTION_TIMEOUT }
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-// qwen3 outputs <think>…</think> blocks before its actual response.
-// Strip them so users never see raw reasoning tokens.
-function stripThinkingTokens(text: string): string {
-  return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
 }
 
 // While streaming, a tag like `<think>` can be split across chunk boundaries. Return the prefix of

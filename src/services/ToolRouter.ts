@@ -4,6 +4,7 @@ import { MemoryService } from '../features/memory'
 import type { MemoryCategory } from '../features/memory/types'
 import { logger } from '../lib/logger'
 import { accountService, gitHubConnector, gmailConnector, calendarConnector } from './accounts'
+import { stripMetaPreamble, makePreambleFilter } from '../lib/stripUtils'
 
 // 2.5-T — Tool / Function Calling foundation.
 // A small, real tool registry + the orchestration loop (call → route → feed results back →
@@ -488,13 +489,22 @@ class ToolRouter {
       { role: 'user', content: userMessage },
     ]
 
-    const first = await ollamaService.chatToolRoundStream(messages, this.tools, onThinking, onContent,
-      undefined, undefined, think)
+    // Wrap onContent with a preamble filter so the live stream shown in the chat never
+    // contains the model's planning narration ("Let me…", "The user wants…" etc.).
+    // Preamble tokens are routed to onThinking (→ thinking panel) instead.
+    const firstFilter = onContent ? makePreambleFilter(onContent, onThinking) : null
+    const first = await ollamaService.chatToolRoundStream(messages, this.tools, onThinking,
+      firstFilter?.onContent ?? onContent, undefined, undefined, think)
+    firstFilter?.flush()
     if (first.thinking) trace.push({ kind: 'thinking', text: first.thinking })
 
     if (!first.toolCalls.length) {
-      let reply = first.content.trim()
-      if (!reply) reply = await this.answerDirectly(messages, onContent)   // reasoning ate the budget → answer plainly
+      // Strip any residual meta-preamble from the accumulated reply (safety net for fast-path).
+      let raw = first.content.trim()
+      if (!raw) raw = await this.answerDirectly(messages, onContent)   // reasoning ate the budget → answer plainly
+      const { preamble: pre, answer: clean } = stripMetaPreamble(raw)
+      if (pre) onThinking?.('\n[preamble stripped]\n' + pre)
+      const reply = clean || raw
       trace.push({ kind: 'answer', text: reply })
       return { reply, usedTools: [], trace }
     }
@@ -540,12 +550,17 @@ class ToolRouter {
     }
 
     // A tool needs interpretation (e.g. recall_memory) → let the model compose the reply (streamed).
-    const second = await ollamaService.chatToolRoundStream(messages, this.tools, onThinking, onContent,
-      undefined, undefined, think)
+    // Apply the preamble filter on this second round too.
+    const secondFilter = onContent ? makePreambleFilter(onContent, onThinking) : null
+    const second = await ollamaService.chatToolRoundStream(messages, this.tools, onThinking,
+      secondFilter?.onContent ?? onContent, undefined, undefined, think)
+    secondFilter?.flush()
     if (second.thinking) trace.push({ kind: 'thinking', text: second.thinking })
-    let reply = second.content.trim()
-    if (!reply) reply = await this.answerDirectly(messages, onContent)
-    reply = reply || readyOutputs.join('  ')
+    let raw2 = second.content.trim()
+    if (!raw2) raw2 = await this.answerDirectly(messages, onContent)
+    const { preamble: pre2, answer: clean2 } = stripMetaPreamble(raw2 || readyOutputs.join('  '))
+    if (pre2) onThinking?.('\n[preamble stripped]\n' + pre2)
+    const reply = clean2 || raw2 || readyOutputs.join('  ')
     trace.push({ kind: 'answer', text: reply })
     return { reply, usedTools, trace }
   }
@@ -554,8 +569,11 @@ class ToolRouter {
   // no content. When that happens we re-ask with think:false (no tools) so it answers directly —
   // streamed through onContent so it still types in live.
   private async answerDirectly(messages: OllamaChatMessage[], onContent?: (delta: string) => void): Promise<string> {
-    const fb = await ollamaService.chatToolRoundStream(messages, [], undefined, onContent, 0.5, undefined, false)
-    return fb.content.trim()
+    const filter = onContent ? makePreambleFilter(onContent) : null
+    const fb = await ollamaService.chatToolRoundStream(messages, [], undefined, filter?.onContent ?? onContent, 0.5, undefined, false)
+    filter?.flush()
+    const { answer } = stripMetaPreamble(fb.content.trim())
+    return answer || fb.content.trim()
   }
 }
 

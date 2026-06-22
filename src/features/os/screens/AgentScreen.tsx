@@ -248,6 +248,18 @@ export function AgentScreen() {
 
   // Type freely — send only on Enter / the send button / a final voice transcript. (No auto-submit:
   // the old 2.2s idle-timer fired messages by itself mid-typing.)
+  // Phase-aware label shown under the orb — tells the user exactly what Piku is doing.
+  const orbLabel = (() => {
+    switch (phase) {
+      case 'listening': return 'listening…'
+      case 'thinking':  return 'thinking…'
+      case 'speaking':  return liveStatus ? liveStatus : 'speaking…'
+      case 'acting':    return liveStatus || 'acting…'
+      case 'updating':  return 'updating…'
+      default:          return 'here with you'
+    }
+  })()
+
   const onInputChange = (v: string) => setInput(v)
 
   const commitTitle = () => { if (ctx) agentHub.rename(ctx.id, titleDraft); setEditingTitle(false) }
@@ -309,7 +321,7 @@ export function AgentScreen() {
             {/* presence orb — the protagonist, on the left */}
             <div className="flex flex-col items-center pt-3 pb-4 shrink-0">
               <Orb presence={phase} size={104} />
-              <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-cyan-300/55 mt-2">{running ? (liveStatus || 'thinking…') : 'here with you'}</div>
+              <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-cyan-300/55 mt-2">{orbLabel}</div>
             </div>
 
             {/* prominent new-session */}
@@ -474,6 +486,8 @@ export function AgentScreen() {
                 <span className="font-hud text-cyan-300 text-glow-cyan">›</span>
                 <input ref={inputRef} value={input} onChange={e => onInputChange(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && input.trim() && !running) { e.preventDefault(); void run(input) } }}
+                  onFocus={() => { if (!running) setPhase('listening') }}
+                  onBlur={() => { if (!running) setPhase('idle') }}
                   disabled={running} placeholder={running ? 'Piku is working…' : 'Talk with Wispr Flow, or type…'}
                   style={{ caretColor: '#22d3ee' }}
                   className="flex-1 bg-transparent text-[14px] text-white/90 placeholder:text-white/35 outline-none disabled:opacity-60" />
