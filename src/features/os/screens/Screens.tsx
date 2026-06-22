@@ -250,35 +250,278 @@ export function ProjectsScreen({ onNavigateToGalaxy, onNavigate }: { onNavigateT
 }
 
 /* ───────────────────────── Datasets ───────────────────────── */
+
+interface DatasetsState {
+  // Projects
+  projectCount: number
+  projectNames: string[]
+  projectsLoading: boolean
+
+  // World Model graph
+  nodeCount: number
+  edgeCount: number
+  graphLoading: boolean
+
+  // Local models + opencode
+  localModels: string[]
+  modelsLoading: boolean
+
+  // Project-brain vaults
+  brainEntries: import('../../../services/ProjectBrainService').BrainGraphEntry[]
+  brainLoading: boolean
+
+  // Memory / embeddings
+  memTotal: number
+  memConfirmed: number
+  memLoading: boolean
+}
+
 export function DatasetsScreen() {
-  const sets = [
-    { name: 'product_data_v2.csv', kind: 'CSV · 2.4 MB',  status: 'Absorbed' },
-    { name: 'meeting_notes/',      kind: 'Folder · 38 md', status: 'Absorbed' },
-    { name: 'arxiv_papers/',       kind: 'PDF · 11 files', status: 'Queued' },
-  ]
+  const [state, setState] = useState<DatasetsState>({
+    projectCount: 0, projectNames: [], projectsLoading: true,
+    nodeCount: 0, edgeCount: 0, graphLoading: true,
+    localModels: [], modelsLoading: true,
+    brainEntries: [], brainLoading: true,
+    memTotal: 0, memConfirmed: 0, memLoading: true,
+  })
+
+  useEffect(() => {
+    let cancelled = false
+
+    // ── Projects ──────────────────────────────────────────────
+    void (async () => {
+      try {
+        const all = await projectService.getAllProjects()
+        if (!cancelled) setState(s => ({ ...s, projectCount: all.length, projectNames: all.map(p => p.name), projectsLoading: false }))
+      } catch {
+        if (!cancelled) setState(s => ({ ...s, projectsLoading: false }))
+      }
+    })()
+
+    // ── World Model graph ──────────────────────────────────────
+    void (async () => {
+      try {
+        const [nodes, edges] = await Promise.all([graphService.getAllNodes(), graphService.getConfirmedEdges()])
+        if (!cancelled) setState(s => ({ ...s, nodeCount: nodes.length, edgeCount: edges.length, graphLoading: false }))
+      } catch {
+        if (!cancelled) setState(s => ({ ...s, graphLoading: false }))
+      }
+    })()
+
+    // ── Local models ───────────────────────────────────────────
+    void (async () => {
+      try {
+        const names = await ollamaService.listModels()
+        if (!cancelled) setState(s => ({ ...s, localModels: names, modelsLoading: false }))
+      } catch {
+        if (!cancelled) setState(s => ({ ...s, modelsLoading: false }))
+      }
+    })()
+
+    // ── Project-brain vaults ───────────────────────────────────
+    void (async () => {
+      try {
+        const { projectBrainService } = await import('../../../services/ProjectBrainService')
+        const entries = await projectBrainService.listGraphs()
+        if (!cancelled) setState(s => ({ ...s, brainEntries: entries, brainLoading: false }))
+      } catch {
+        if (!cancelled) setState(s => ({ ...s, brainLoading: false }))
+      }
+    })()
+
+    // ── Memory / embeddings ────────────────────────────────────
+    void (async () => {
+      try {
+        const { MemoryStore } = await import('../../memory/MemoryStore')
+        const stats = await new MemoryStore().stats()
+        if (!cancelled) setState(s => ({ ...s, memTotal: stats.total, memConfirmed: stats.confirmed, memLoading: false }))
+      } catch {
+        if (!cancelled) setState(s => ({ ...s, memLoading: false }))
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [])
+
+  const totalBrainNodes = state.brainEntries.reduce((acc, e) => acc + e.nodeCount, 0)
+
   return (
-    <ScreenShell title="Datasets" subtitle="Documents absorbed into Piku's memory and World Model." action={<AddBtn label="+ Add source" />}>
+    <ScreenShell title="Datasets" subtitle="Everything Piku knows — the master store of live counts across all stores.">
       <div className="grid grid-cols-12 gap-4">
-        <HudPanel className="col-span-12" label="Sources" code="01">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="font-hud text-[9px] uppercase tracking-[0.2em] text-amber-300/80 bg-amber-400/10 border border-amber-400/25 px-2 py-0.5" style={{ ...chamfer(5) }}>SAMPLE — not yet wired</span>
-          </div>
-          <div className="flex flex-col gap-2">
-            {sets.map(s => (
-              <div key={s.name} className="flex items-center gap-3 px-3 py-2.5" style={{ ...chamfer(8), background: 'rgba(255,255,255,0.025)' }}>
-                <span className="w-8 h-8 shrink-0 flex items-center justify-center text-[13px] text-white/50" style={{ ...chamfer(6), background: 'rgba(255,255,255,0.04)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)' }}>≣</span>
-                <div className="flex-1 min-w-0"><div className="text-[13.5px] text-white/90 truncate">{s.name}</div><div className="font-hud text-[9.5px] uppercase tracking-wider text-white/35 mt-0.5">{s.kind}</div></div>
-                <HudChip dim={s.status !== 'Absorbed'}>{s.status}</HudChip>
+
+        {/* ── 01 Projects ── */}
+        <HudPanel className="col-span-12 lg:col-span-6" label="Projects" code="01"
+          action={<HudChip dim={state.projectsLoading}>{state.projectsLoading ? 'loading' : `${state.projectCount} projects`}</HudChip>}>
+          <div className="flex items-start gap-3 mb-3">
+            <Glyph>▤</Glyph>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13.5px] text-white/90">ProjectStore — IndexedDB</div>
+              <div className="font-hud text-[9.5px] uppercase tracking-wider text-white/35 mt-0.5">
+                {state.projectsLoading ? 'querying…' : state.projectCount === 0 ? 'empty — no projects yet' : `${state.projectCount} tracked · IndexedDB · local`}
               </div>
-            ))}
+            </div>
+          </div>
+          {!state.projectsLoading && state.projectNames.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              {state.projectNames.slice(0, 5).map(name => (
+                <div key={name} className="flex items-center gap-2 px-2.5 py-1.5" style={{ ...chamfer(6), background: 'rgba(255,255,255,0.02)' }}>
+                  <span className="text-[11.5px] text-white/70 truncate">{name}</span>
+                </div>
+              ))}
+              {state.projectNames.length > 5 && (
+                <div className="font-hud text-[9px] uppercase tracking-[0.15em] text-white/25 pl-1">+{state.projectNames.length - 5} more</div>
+              )}
+            </div>
+          )}
+          <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-cyan-300/40 mt-3">
+            Source: projectService.getAllProjects() → ProjectStore (IDB)
           </div>
         </HudPanel>
+
+        {/* ── 02 World Model graph ── */}
+        <HudPanel className="col-span-12 lg:col-span-6" label="World Model — Knowledge Graph" code="02"
+          action={<HudChip dim={state.graphLoading}>{state.graphLoading ? 'loading' : `${state.nodeCount}N · ${state.edgeCount}E`}</HudChip>}>
+          <div className="flex items-start gap-3">
+            <Glyph>✦</Glyph>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13.5px] text-white/90">GraphService — IndexedDB</div>
+              <div className="font-hud text-[9.5px] uppercase tracking-wider text-white/35 mt-0.5">
+                {state.graphLoading
+                  ? 'querying…'
+                  : state.nodeCount === 0
+                    ? 'empty — graph grows as Piku learns'
+                    : `${state.nodeCount} nodes · ${state.edgeCount} confirmed edges`}
+              </div>
+            </div>
+          </div>
+          <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-cyan-300/40 mt-3">
+            Source: graphService.getAllNodes() + getConfirmedEdges() → GraphStore (IDB)
+          </div>
+        </HudPanel>
+
+        {/* ── 03 Models ── */}
+        <HudPanel className="col-span-12 lg:col-span-6" label="Models" code="03"
+          action={<HudChip dim={state.modelsLoading}>{state.modelsLoading ? 'loading' : `${state.localModels.length} local`}</HudChip>}>
+          <div className="flex flex-col gap-2">
+            {/* opencode brain — always shown, static descriptor */}
+            <div className="flex items-center gap-3 px-3 py-2.5" style={{ ...chamfer(8), background: 'rgba(217,70,239,0.06)', boxShadow: 'inset 0 0 0 1px rgba(217,70,239,0.18)' }}>
+              <Glyph accent="violet">⌘</Glyph>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13.5px] text-fuchsia-100/90 truncate">{OPENCODE_MODEL.modelID}</div>
+                <div className="font-hud text-[9.5px] uppercase tracking-wider text-fuchsia-200/35 mt-0.5">opencode · deep reasoning · free cloud</div>
+              </div>
+              <HudChip accent="violet">brain</HudChip>
+            </div>
+            {/* live local models from Ollama */}
+            {state.modelsLoading
+              ? <div className="font-hud text-[10px] uppercase tracking-[0.15em] text-white/30 py-1">scanning ollama…</div>
+              : state.localModels.length === 0
+                ? <div className="font-hud text-[10px] uppercase tracking-[0.15em] text-white/25 py-1">ollama offline or no models pulled</div>
+                : state.localModels.map(name => {
+                    const m = modelMeta(name)
+                    return (
+                      <div key={name} className="flex items-center gap-3 px-3 py-2.5" style={{ ...chamfer(8), background: 'rgba(255,255,255,0.025)' }}>
+                        <Glyph>{m.glyph}</Glyph>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[13.5px] text-white/90 truncate">{name}</div>
+                          <div className="font-hud text-[9.5px] uppercase tracking-wider text-white/35 mt-0.5">{m.kind} · local · private</div>
+                        </div>
+                        <HudChip dim>ollama</HudChip>
+                      </div>
+                    )
+                  })}
+          </div>
+          <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-cyan-300/40 mt-3">
+            Source: ollamaService.listModels() + OPENCODE_MODEL (static)
+          </div>
+        </HudPanel>
+
+        {/* ── 04 Project-brain vaults ── */}
+        <HudPanel className="col-span-12 lg:col-span-6" label="Project-Brain Vaults" code="04"
+          action={<HudChip dim={state.brainLoading}>{state.brainLoading ? 'loading' : `${state.brainEntries.length} brains · ${totalBrainNodes} nodes`}</HudChip>}>
+          <div className="flex items-start gap-3 mb-3">
+            <Glyph>◈</Glyph>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13.5px] text-white/90">Piku-Vault — filesystem</div>
+              <div className="font-hud text-[9.5px] uppercase tracking-wider text-white/35 mt-0.5">
+                {state.brainLoading
+                  ? 'scanning vault…'
+                  : state.brainEntries.length === 0
+                    ? 'empty — brains created per project / brainstorm / execute session'
+                    : `${state.brainEntries.length} saved brains · ${totalBrainNodes} graph nodes total`}
+              </div>
+            </div>
+          </div>
+          {!state.brainLoading && state.brainEntries.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              {state.brainEntries.slice(0, 5).map(e => (
+                <div key={`${e.category}/${e.slug}`} className="flex items-center gap-2 px-2.5 py-1.5" style={{ ...chamfer(6), background: 'rgba(255,255,255,0.02)' }}>
+                  <span className="font-hud text-[8.5px] uppercase tracking-wider text-white/30 w-20 shrink-0">{e.category}</span>
+                  <span className="text-[11.5px] text-white/70 flex-1 truncate">{e.slug}</span>
+                  <span className="font-hud text-[9px] text-cyan-300/50 tabular-nums shrink-0">{e.nodeCount}N</span>
+                </div>
+              ))}
+              {state.brainEntries.length > 5 && (
+                <div className="font-hud text-[9px] uppercase tracking-[0.15em] text-white/25 pl-1">+{state.brainEntries.length - 5} more</div>
+              )}
+            </div>
+          )}
+          <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-cyan-300/40 mt-3">
+            Source: projectBrainService.listGraphs() → ~/Documents/Piku-Vault/
+          </div>
+        </HudPanel>
+
+        {/* ── 05 Memory / Embeddings ── */}
+        <HudPanel className="col-span-12 lg:col-span-6" label="Memory — Extracted Facts" code="05"
+          action={<HudChip dim={state.memLoading}>{state.memLoading ? 'loading' : `${state.memTotal} total`}</HudChip>}>
+          <div className="flex items-start gap-3">
+            <Glyph>≈</Glyph>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13.5px] text-white/90">MemoryStore — IndexedDB</div>
+              <div className="font-hud text-[9.5px] uppercase tracking-wider text-white/35 mt-0.5">
+                {state.memLoading
+                  ? 'querying…'
+                  : state.memTotal === 0
+                    ? 'empty — facts extracted from conversations over time'
+                    : `${state.memTotal} memories · ${state.memConfirmed} confirmed · embedded`}
+              </div>
+            </div>
+          </div>
+          <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-cyan-300/40 mt-3">
+            Source: MemoryStore.stats() → IDB 'memories' store
+          </div>
+        </HudPanel>
+
+        {/* ── 06 Piku source — static descriptor ── */}
+        <HudPanel className="col-span-12 lg:col-span-6" label="Piku Source" code="06"
+          action={<HudChip dim>static</HudChip>}>
+          <div className="flex items-start gap-3">
+            <Glyph>⌥</Glyph>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13.5px] text-white/90">Tauri v2 + React/TS + Rust</div>
+              <div className="font-hud text-[9.5px] uppercase tracking-wider text-white/35 mt-0.5">
+                ~/piku · branch glm-piku · not yet live-indexed
+              </div>
+            </div>
+          </div>
+          <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-white/25 mt-3">
+            Live source indexing (chunker → graph → retrieval) is to-build — see build status below.
+          </div>
+        </HudPanel>
+
       </div>
+
       <BuildStatus items={[
-        { label: 'DocumentAbsorptionService', state: 'planned' },
-        { label: 'DocumentChunker + EntityExtractor', state: 'planned' },
-        { label: 'Drag-drop ingestion UI', state: 'planned' },
+        { label: 'Projects — projectService.getAllProjects()', state: 'built' },
+        { label: 'World Model graph — nodes + confirmed edges', state: 'built' },
+        { label: 'Local models — ollamaService.listModels()', state: 'built' },
+        { label: 'opencode brain model — OPENCODE_MODEL', state: 'built' },
+        { label: 'Project-brain vaults — projectBrainService.listGraphs()', state: 'built' },
+        { label: 'Memory / embeddings — MemoryStore.stats()', state: 'built' },
+        { label: 'DocumentAbsorptionService — drag-drop ingestion', state: 'planned' },
+        { label: 'DocumentChunker + EntityExtractor pipeline', state: 'planned' },
         { label: 'PDF / folder watchers', state: 'planned' },
+        { label: 'Piku source — live code indexing', state: 'planned' },
       ]} />
     </ScreenShell>
   )
