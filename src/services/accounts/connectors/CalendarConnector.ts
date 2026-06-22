@@ -27,13 +27,18 @@ async function freshToken(account: ServiceAccount): Promise<string | null> {
 }
 
 // Calendar API GETs go through Rust curl (no CORS), same as Gmail.
-async function api<T>(token: string, path: string): Promise<T | null> {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const raw = await invoke<string>('http_get', { url: `https://www.googleapis.com/calendar/v3${path}`, authorization: `Bearer ${token}` })
-    const data = JSON.parse(raw)
-    return data?.error ? null : data as T
-  } catch { return null }
+// Throws CalendarApiError on an API-level error (401/403/etc.) so callers can distinguish
+// "no events" from "not authorised" and show an actionable reconnect prompt.
+export class CalendarApiError extends Error {
+  constructor(public code: number, message: string) { super(message) }
+}
+
+async function api<T>(token: string, path: string): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  const raw = await invoke<string>('http_get', { url: `https://www.googleapis.com/calendar/v3${path}`, authorization: `Bearer ${token}` })
+  const data = JSON.parse(raw) as { error?: { code?: number; message?: string } } & T
+  if (data?.error) throw new CalendarApiError(data.error.code ?? 0, data.error.message ?? 'Calendar API error')
+  return data as T
 }
 
 function toISO(s: { dateTime?: string; date?: string } | undefined): string {
@@ -47,10 +52,12 @@ export class CalendarConnector {
   async test(account: ServiceAccount): Promise<boolean> {
     const token = await freshToken(account)
     if (!token) return false
-    return (await api<{ id: string }>(token, '/users/me/calendarList/primary')) !== null
+    try { await api<{ id: string }>(token, '/users/me/calendarList/primary'); return true }
+    catch { return false }
   }
 
   // Upcoming events from the primary calendar, between timeMin and timeMax (ISO strings).
+  // Throws CalendarApiError on 401/403 so the caller can distinguish missing auth from empty calendar.
   async list(account: ServiceAccount, timeMinISO: string, timeMaxISO: string, max = 20): Promise<CalendarEvent[]> {
     const token = await freshToken(account)
     if (!token) return []
@@ -61,9 +68,10 @@ export class CalendarConnector {
       singleEvents: 'true',
       orderBy: 'startTime',
     }).toString()
+    // api() throws CalendarApiError on an API-level error (e.g. 401 no calendar scope).
     const data = await api<{ items?: any[] }>(token, `/calendars/primary/events?${q}`)
     if (!data?.items) return []
-    return data.items.map(it => ({
+    return data.items.map((it: any) => ({
       id:        it.id,
       title:     it.summary ?? '(no title)',
       start:     toISO(it.start),

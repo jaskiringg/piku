@@ -632,19 +632,39 @@ export function CalendarScreen() {
   const [taggedEvents, setTaggedEvents] = useState<TaggedCalendarEvent[] | null>(null)
   const [loadingCal, setLoadingCal] = useState(false)
   const [filter, setFilter] = useState<CalFilter>('all')
+  // Accounts that returned a calendar API error (needs reconnect with calendar scope)
+  const [authErrors, setAuthErrors] = useState<{ acct: ServiceAccount; code: number }[]>([])
+
+  // Merge 'calendar'-service accounts with 'email'-service accounts (Gmail OAuth tokens carry
+  // calendar.readonly scope from the same consent). Dedupe by email so an account connected via
+  // both paths appears only once (prefer the 'calendar'-service entry).
+  const mergeCalendarAccounts = async (): Promise<ServiceAccount[]> => {
+    const [calRows, emailRows] = await Promise.all([
+      accountService.getByService('calendar'),
+      accountService.getByService('email'),
+    ])
+    const active = (rows: ServiceAccount[]) => rows.filter(a => a.enabled && a.token)
+    const seen = new Map<string, ServiceAccount>()  // email → account, prefer 'calendar'-service
+    for (const a of [...active(calRows), ...active(emailRows)]) {
+      const key = (a.email ?? a.id).toLowerCase()
+      if (!seen.has(key)) seen.set(key, a)   // first-wins: calRows iterated first
+    }
+    return [...seen.values()]
+  }
 
   // Load accounts + fetch events per account (with 9s timeout each)
   const loadAll = async (force = false) => {
     try {
-      const accts = (await accountService.getByService('calendar')).filter(a => a.enabled && a.token)
+      const accts = await mergeCalendarAccounts()
       setCalAccts(accts)
       if (!accts.length) return
       if (!force && taggedEvents !== null) return   // already loaded
       setLoadingCal(true)
-      const { calendarConnector } = await import('../../../services/accounts')
+      const { calendarConnector, CalendarApiError } = await import('../../../services/accounts')
       const now = new Date()
       const horizon = new Date(now.getTime() + 14 * 864e5)
       const allTagged: TaggedCalendarEvent[] = []
+      const newAuthErrors: { acct: ServiceAccount; code: number }[] = []
       await Promise.allSettled(accts.map(async acct => {
         try {
           const evs = await Promise.race([
@@ -655,8 +675,15 @@ export function CalendarScreen() {
           for (const ev of evs) {
             allTagged.push({ ...ev, _accountTag: tag, _accountEmail: acct.email ?? acct.label })
           }
-        } catch { /* timeout or fetch error — skip this account */ }
+        } catch (err) {
+          // Surface auth errors so the UI can show an actionable reconnect row.
+          if (err instanceof CalendarApiError) {
+            newAuthErrors.push({ acct, code: err.code })
+          }
+          // timeout or other network error — skip silently
+        }
       }))
+      setAuthErrors(newAuthErrors)
       // Sort by start, then dedupe (same title + same start minute across accounts)
       allTagged.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
       const seen = new Set<string>()
@@ -768,11 +795,31 @@ export function CalendarScreen() {
           <button onClick={connect} disabled={connecting} className="font-hud text-[10px] uppercase tracking-wider text-cyan-300/60 hover:text-cyan-200 disabled:opacity-40">+ Add account</button>
         }>
           <FilterBar />
+          {/* Auth-error rows — shown when an account returned 401/403 (missing calendar scope) */}
+          {authErrors.map(({ acct, code }) => (
+            <div key={acct.id} className="flex items-center gap-3 mb-3 px-3 py-2.5"
+              style={{ ...chamfer(8), background: 'rgba(251,191,36,0.06)', boxShadow: 'inset 0 0 0 1px rgba(251,191,36,0.25)' }}>
+              <span className="text-amber-300/80 text-[14px] shrink-0">⚠</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12.5px] text-amber-100/80 truncate">{acct.email ?? acct.label}</div>
+                <div className="font-hud text-[9.5px] uppercase tracking-wider text-amber-300/55 mt-0.5">
+                  {code === 401 || code === 403
+                    ? 'Calendar access not granted — reconnect to add the Calendar scope'
+                    : `Calendar fetch failed (${code}) — reconnect to retry`}
+                </div>
+              </div>
+              <button onClick={connect} disabled={connecting}
+                className="font-hud text-[9.5px] uppercase tracking-[0.15em] text-amber-200 hover:text-amber-100 px-2.5 py-1.5 transition-colors shrink-0 disabled:opacity-40"
+                style={{ ...chamfer(6), boxShadow: 'inset 0 0 0 1px rgba(251,191,36,0.35)' }}>
+                Reconnect
+              </button>
+            </div>
+          ))}
           {loadingCal && taggedEvents === null ? (
             <Hint>loading calendar…</Hint>
-          ) : visibleEvents.length === 0 ? (
+          ) : visibleEvents.length === 0 && authErrors.length === 0 ? (
             <Hint>Nothing scheduled in the next 14 days{filter !== 'all' ? ` for ${filter}` : ''}.</Hint>
-          ) : (
+          ) : visibleEvents.length === 0 ? null : (
             <div className="max-h-[520px] overflow-y-auto -mx-1 px-1">
               {[...byDay.values()].map(group => (
                 <div key={group.dateLabel} className="mb-4 last:mb-0">
