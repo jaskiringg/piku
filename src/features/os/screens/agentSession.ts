@@ -2,6 +2,7 @@ import type { TraceStep } from '../../../services/ToolRouter'
 import type { Mode } from '../../../services/modes/Modes'
 import { AgentContextStore } from '../../memory'
 import type { AgentContext, AgentTurn } from '../../memory'
+import { projectBrainService, modeToCategory, toSlug } from '../../../services/ProjectBrainService'
 
 // The Agent control hub. The Agent is no longer one session — it's a set of CONTEXTS, each a
 // named chat with its own conversation scope, optionally linked to a Project and feeding the
@@ -115,6 +116,17 @@ class AgentHub {
   }
 
   remove(id: string) {
+    // Best-effort: delete the vault brain for this session before removing it
+    const ctx = this.contexts.find(c => c.id === id)
+    if (ctx?.mode) {
+      const category = modeToCategory(ctx.mode)
+      if (category) {
+        const name = ctx.projectId ?? ctx.title
+        const slug = toSlug(name)
+        void projectBrainService.deleteEntry(category, slug).catch(() => {})
+      }
+    }
+
     this.contexts = this.contexts.filter(c => c.id !== id)
     void store.delete(id).catch(() => {})
     if (this.activeId === id) {

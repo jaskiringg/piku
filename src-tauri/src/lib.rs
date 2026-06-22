@@ -31,6 +31,7 @@ pub fn run() {
             vault::vault_write,
             vault::vault_read,
             vault::vault_list,
+            vault::vault_delete,
             os_tools::list_dir,
             os_tools::fetch_url,
             os_tools::web_headlines,

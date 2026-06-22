@@ -46,6 +46,19 @@ pub fn vault_read(category: String, slug: String, filename: String) -> Result<St
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// Recursively remove ~/Documents/Piku-Vault/<category>/<slug>/. No-op if already gone.
+#[tauri::command]
+pub fn vault_delete(category: String, slug: String) -> Result<(), String> {
+    if !valid_category(&category) {
+        return Err(format!("invalid category: {category}"));
+    }
+    let dir = vault_base()?.join(&category).join(&slug);
+    if dir.exists() {
+        fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// List the entry-slug folder names under a category (sorted; empty if none).
 #[tauri::command]
 pub fn vault_list(category: String) -> Result<Vec<String>, String> {

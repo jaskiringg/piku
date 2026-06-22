@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import type { Galaxy }                  from '../types'
 import { NODE_COLORS, DEFAULT_NODE_COLOR } from '../types'
 import { graphActivityLog }             from '../GraphActivityLog'
 import type { GraphActivityEvent }      from '../GraphActivityLog'
 import { chamfer, CornerTicks }         from '../../os/Hud'
+import { projectBrainService }          from '../../../services/ProjectBrainService'
+import type { BrainGraphEntry }         from '../../../services/ProjectBrainService'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -16,13 +18,19 @@ interface GraphPanelProps {
   nodeCount: number
   edgeCount: number
   nodeTypeCounts: Record<string, number>
+  /** Called when user selects a saved brain entry to view; null = return to World Model */
+  onSelectBrain?: (entry: BrainGraphEntry | null) => void
+  /** The currently active brain entry (null = World Model) */
+  activeBrain?: BrainGraphEntry | null
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export function GraphPanel({ viewMode, activeGalaxy, galaxies, nodeCount, edgeCount, nodeTypeCounts }: GraphPanelProps) {
+export function GraphPanel({ viewMode, activeGalaxy, galaxies, nodeCount, edgeCount, nodeTypeCounts, onSelectBrain, activeBrain }: GraphPanelProps) {
   const [show, setShow] = useState(false)
-  const [tab, setTab] = useState<'stats' | 'activity'>('stats')
+  const [tab, setTab] = useState<'stats' | 'activity' | 'brains'>('stats')
+  const [brains, setBrains] = useState<BrainGraphEntry[]>([])
+  const [brainsLoading, setBrainsLoading] = useState(false)
   const [activityEvents, setActivityEvents] = useState<StampedEvent[]>(() =>
     graphActivityLog.getHistory() as StampedEvent[]
   )
@@ -49,6 +57,23 @@ export function GraphPanel({ viewMode, activeGalaxy, galaxies, nodeCount, edgeCo
     setUnreadCount(0)
   }
 
+  const loadBrains = useCallback(async () => {
+    setBrainsLoading(true)
+    try {
+      const list = await projectBrainService.listGraphs()
+      setBrains(list)
+    } catch { /* swallow */ } finally {
+      setBrainsLoading(false)
+    }
+  }, [])
+
+  // Reload brains list whenever the brains tab is opened
+  useEffect(() => {
+    if (tab === 'brains' && show) {
+      void loadBrains()
+    }
+  }, [tab, show, loadBrains])
+
   const toggle = () => {
     setShow(v => {
       if (!v) setUnreadCount(0)
@@ -68,7 +93,7 @@ export function GraphPanel({ viewMode, activeGalaxy, galaxies, nodeCount, edgeCo
           style={{ ...chamfer(8), boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.18), 0 8px 30px -10px rgba(0,0,0,0.7)' }}>
           <CornerTicks accent="cyan" />
           <span className="font-hud text-[9px] uppercase tracking-[0.15em] text-white/40">
-            {viewMode === 'macro' ? '✦ cosmos' : activeGalaxyData?.name ?? '✦ graph'}
+            {activeBrain ? `✦ ${activeBrain.slug}` : viewMode === 'macro' ? '✦ cosmos' : activeGalaxyData?.name ?? '✦ graph'}
           </span>
           <span className="font-hud text-[9px] text-white/20">{nodeCount}</span>
           {!show && unreadCount > 0 && (
@@ -100,6 +125,11 @@ export function GraphPanel({ viewMode, activeGalaxy, galaxies, nodeCount, edgeCo
               onClick={() => setTab('activity')}
               className={`font-hud text-[9px] uppercase tracking-[0.15em] pb-2 border-b-2 transition-colors ${tab === 'activity' ? 'text-cyan-300/70 border-cyan-400/40' : 'text-white/30 border-transparent hover:text-white/50'}`}>
               Activity{unreadCount > 0 && <span className="ml-1 text-[8px] bg-cyan-500/30 text-cyan-300/80 px-1.5 py-0.5">{unreadCount}</span>}
+            </button>
+            <button
+              onClick={() => setTab('brains')}
+              className={`font-hud text-[9px] uppercase tracking-[0.15em] pb-2 border-b-2 transition-colors ${tab === 'brains' ? 'text-cyan-300/70 border-cyan-400/40' : 'text-white/30 border-transparent hover:text-white/50'}`}>
+              Brains
             </button>
           </div>
 
@@ -189,6 +219,64 @@ export function GraphPanel({ viewMode, activeGalaxy, galaxies, nodeCount, edgeCo
                     ))
                   )}
                 </div>
+              </div>
+            )}
+
+            {tab === 'brains' && (
+              <div className="flex flex-col gap-2">
+                {/* World Model toggle */}
+                <div className="flex items-center justify-between pb-1 border-b border-white/6">
+                  <span className="font-hud text-[8px] uppercase tracking-[0.15em] text-white/20">Saved Brains</span>
+                  {activeBrain && onSelectBrain && (
+                    <button
+                      onClick={() => onSelectBrain(null)}
+                      className="font-hud text-[8px] text-cyan-300/50 hover:text-cyan-300/80 transition-colors">
+                      ← World Model
+                    </button>
+                  )}
+                </div>
+
+                {brainsLoading && (
+                  <p className="font-hud text-[10px] text-white/20 text-center py-2">Loading…</p>
+                )}
+
+                {!brainsLoading && brains.length === 0 && (
+                  <p className="font-hud text-[10px] text-white/20 text-center py-2">
+                    No saved brain graphs yet. Start a project or brainstorm session to build one.
+                  </p>
+                )}
+
+                {!brainsLoading && brains.map(entry => {
+                  const isActive = activeBrain?.category === entry.category && activeBrain?.slug === entry.slug
+                  const catColor = entry.category === 'projects' ? '#60A5FA'
+                    : entry.category === 'brainstorms' ? '#A78BFA'
+                    : '#34D399'
+                  return (
+                    <div
+                      key={`${entry.category}/${entry.slug}`}
+                      className="flex items-center gap-2 rounded bg-white/[0.03] border border-white/6 px-2.5 py-2 cursor-pointer hover:bg-white/[0.06] transition-colors"
+                      style={isActive ? { borderColor: `${catColor}44` } : {}}
+                      onClick={() => onSelectBrain?.(isActive ? null : entry)}
+                    >
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: catColor }} />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-hud text-[10px] text-white/60 truncate">{entry.slug}</div>
+                        <div className="font-hud text-[8px] uppercase tracking-[0.12em] text-white/25">{entry.category.replace('s', '')}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-hud text-[9px] text-white/40">{entry.nodeCount}</div>
+                        <div className="font-hud text-[7px] uppercase tracking-[0.1em] text-white/20">nodes</div>
+                      </div>
+                      {isActive && <span className="font-hud text-[8px] text-cyan-300/60 ml-1">●</span>}
+                    </div>
+                  )
+                })}
+
+                <button
+                  onClick={() => void loadBrains()}
+                  className="font-hud text-[8px] text-white/20 hover:text-white/45 transition-colors text-center pt-1">
+                  ↻ refresh
+                </button>
               </div>
             )}
           </div>

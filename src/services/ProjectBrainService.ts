@@ -34,6 +34,15 @@ export function toSlug(name: string): string {
     || 'untitled'
 }
 
+/** Saved graph entry returned by listGraphs(). */
+export interface BrainGraphEntry {
+  category: 'projects' | 'brainstorms' | 'executes'
+  slug: string
+  graph: unknown            // parsed graph.json content
+  nodeCount: number
+  edgeCount: number
+}
+
 class ProjectBrainService {
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -81,6 +90,43 @@ class ProjectBrainService {
       }
       await invoke('vault_write', { category, slug, filename: 'gdd.md', content })
     } catch { /* swallow */ }
+  }
+
+  /**
+   * Delete the vault entry (all files under <category>/<slug>/) for a brain.
+   * Best-effort — swallows errors.
+   */
+  async deleteEntry(category: string, slug: string): Promise<void> {
+    try {
+      await invoke('vault_delete', { category, slug })
+    } catch { /* swallow — best-effort */ }
+  }
+
+  /**
+   * Return all saved brain graph entries across all 3 categories.
+   * Each entry has the category, slug, parsed graph, and node/edge counts.
+   * Entries without graph.json are skipped.
+   */
+  async listGraphs(): Promise<BrainGraphEntry[]> {
+    const categories: Array<'projects' | 'brainstorms' | 'executes'> = ['projects', 'brainstorms', 'executes']
+    const results: BrainGraphEntry[] = []
+    for (const category of categories) {
+      try {
+        const slugs = await invoke<string[]>('vault_list', { category })
+        for (const slug of slugs) {
+          try {
+            const raw = await invoke<string>('vault_read', { category, slug, filename: 'graph.json' })
+            if (!raw.trim()) continue
+            const parsed = JSON.parse(raw) as { nodes?: unknown[]; edges?: unknown[] }
+            const nodeCount = parsed.nodes?.length ?? 0
+            const edgeCount = parsed.edges?.length ?? 0
+            if (nodeCount === 0) continue
+            results.push({ category, slug, graph: parsed, nodeCount, edgeCount })
+          } catch { /* skip entries without graph.json or bad JSON */ }
+        }
+      } catch { /* skip unavailable categories */ }
+    }
+    return results
   }
 
   /**
