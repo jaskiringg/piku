@@ -1,7 +1,7 @@
 import { openDB, type IDBPDatabase } from 'idb'
 
 const DB_NAME    = 'piku-memory'
-const DB_VERSION = 8
+export const DB_VERSION = 8
 
 let _db: IDBPDatabase | null = null
 

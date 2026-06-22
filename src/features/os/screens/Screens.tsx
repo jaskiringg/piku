@@ -588,6 +588,8 @@ export function PeopleScreen() {
 }
 
 /* ───────────────────────── Settings ───────────────────────── */
+import { isOpencodeBrain, setOpencodeBrain } from '../../../features/chat/hooks/useChat'
+import { DB_VERSION } from '../../../features/memory/db'
 import { accountService, gitHubConnector, gmailConnector, connectGoogle, googleConfigured, useUpcomingEvents, connectorFeed } from '../../../services/accounts'
 import type { ServiceAccount, ServiceType, MailSummary, CalendarEvent } from '../../../services/accounts'
 import { openWebWindow, WEB_APPS } from '../../../services/webwin'
@@ -627,7 +629,7 @@ function GmailCard() {
                 <span className="font-hud text-[10px] uppercase tracking-wider text-cyan-300/60">{a.label}</span>
                 <span className="truncate text-white/60">{a.email}</span>
               </span>
-              <button onClick={() => void accountService.delete(a.id).then(load)} className="font-hud text-[10px] text-white/25 hover:text-red-300 shrink-0">remove</button>
+              <button onClick={() => { if (window.confirm('Remove this account?')) void accountService.delete(a.id).then(load) }} className="font-hud text-[10px] text-white/25 hover:text-red-300 shrink-0">remove</button>
             </div>
           ))}
       {googleConfigured()
@@ -682,7 +684,7 @@ function AccountRow({ account, onDelete }: { account: ServiceAccount; onDelete: 
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <button onClick={onDelete} className="font-hud text-[9px] text-white/20 hover:text-red-400/60 uppercase tracking-[0.1em] transition-colors">✕</button>
+        <button onClick={() => { if (window.confirm('Remove this account?')) onDelete() }} className="font-hud text-[9px] text-white/20 hover:text-red-400/60 uppercase tracking-[0.1em] transition-colors">✕</button>
       </div>
     </div>
   )
@@ -691,19 +693,26 @@ function AccountRow({ account, onDelete }: { account: ServiceAccount; onDelete: 
 function AddAccountForm({ service, onAdded }: { service: ServiceType; onAdded: () => void }) {
   const [label, setLabel] = useState('')
   const [token, setToken] = useState('')
+  const [username, setUsername] = useState('')
   const [adding, setAdding] = useState(false)
   const handleAdd = async () => {
     if (!label.trim() || !token.trim()) return
     setAdding(true)
-    await accountService.create(service, label.trim(), token.trim())
-    setLabel(''); setToken(''); setAdding(false)
+    const opts = username.trim() ? { username: username.trim() } : undefined
+    await accountService.create(service, label.trim(), token.trim(), opts)
+    setLabel(''); setToken(''); setUsername(''); setAdding(false)
     onAdded()
   }
   return (
-    <div className="flex items-center gap-2 mt-2">
-      <input value={label} onChange={e => setLabel(e.target.value)} placeholder="label (e.g. Personal)" className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/70 placeholder:text-white/20 outline-none font-hud" />
-      <input value={token} onChange={e => setToken(e.target.value)} placeholder="token / API key" type="password" className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/70 placeholder:text-white/20 outline-none font-hud" />
-      <button onClick={handleAdd} disabled={adding || !label.trim() || !token.trim()} className="font-hud text-[10px] text-cyan-300/60 hover:text-cyan-200 border border-cyan-400/20 px-2.5 py-1 transition-colors disabled:opacity-30">add</button>
+    <div className="mt-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <input value={label} onChange={e => setLabel(e.target.value)} placeholder="label (e.g. Personal)" className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/70 placeholder:text-white/20 outline-none font-hud" />
+        <input value={token} onChange={e => setToken(e.target.value)} placeholder="token / API key" type="password" className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/70 placeholder:text-white/20 outline-none font-hud" />
+        <button onClick={handleAdd} disabled={adding || !label.trim() || !token.trim()} className="font-hud text-[10px] text-cyan-300/60 hover:text-cyan-200 border border-cyan-400/20 px-2.5 py-1 transition-colors disabled:opacity-30">add</button>
+      </div>
+      {service === 'github' && (
+        <input value={username} onChange={e => setUsername(e.target.value)} placeholder="GitHub username" className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/70 placeholder:text-white/20 outline-none font-hud" />
+      )}
     </div>
   )
 }
@@ -740,6 +749,7 @@ function ServiceCard({ service, title }: { service: ServiceType; title: string }
 }
 
 export function SettingsScreen() {
+  const [localOnly, setLocalOnly] = useState(!isOpencodeBrain())
   const Row = ({ label, value, tone = 'idle' }: { label: string; value: string; tone?: 'run' | 'idle' }) => (
     <div className="flex items-center justify-between py-2.5 border-b border-white/5 last:border-0">
       <span className="text-sm text-white/70">{label}</span>
@@ -752,17 +762,28 @@ export function SettingsScreen() {
 
         {/* Core settings */}
         <Card title="Models" className="col-span-12 md:col-span-6">
-          <Row label="Chat model" value="qwen3:4b" tone="run" />
+          <Row label="Chat model" value={ACTIVE_BRAIN.model} tone="run" />
           <Row label="Embedding model" value="nomic-embed-text" />
           <Row label="Tier-2 escalation" value="planned" />
         </Card>
         <Card title="Privacy" className="col-span-12 md:col-span-6">
-          <Row label="Local-first (P4)" value="On" tone="run" />
-          <Row label="Data egress (K4)" value="Off — opt-in only" tone="run" />
-          <Row label="External AI via API key (K2)" value="Never" tone="run" />
+          <div className="flex items-center justify-between py-2.5 border-b border-white/5">
+            <span className="text-sm text-white/70">Local-only (private)</span>
+            <button onClick={() => { const next = !localOnly; setLocalOnly(next); setOpencodeBrain(!next) }}
+              className="relative w-9 h-5 rounded-full transition-colors"
+              style={{ background: localOnly ? 'rgba(34,211,238,0.3)' : 'rgba(255,255,255,0.1)', boxShadow: `inset 0 0 0 1px ${localOnly ? 'rgba(34,211,238,0.4)' : 'rgba(255,255,255,0.15)'}` }}>
+              <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-transform"
+                style={{ transform: `translateX(${localOnly ? '16px' : '0'})`, background: localOnly ? '#22d3ee' : 'rgba(255,255,255,0.3)' }} />
+            </button>
+          </div>
+          <Row label="Local Ollama" value="On-device · private" tone="run" />
+          <Row label="Opencode brain" value={localOnly ? 'Off (local-only)' : `Free cloud · ${OPENCODE_MODEL.modelID}`} tone={localOnly ? 'idle' : 'run'} />
+          <div className="font-hud text-[9.5px] uppercase tracking-[0.18em] text-white/30 mt-2 leading-relaxed">
+            {localOnly ? 'All turns stay on your machine — fully private.' : 'Conversation routes to opencode\'s free cloud model (no API key). Data leaves the machine.'}
+          </div>
         </Card>
         <Card title="Storage" className="col-span-12 md:col-span-6">
-          <Row label="Database" value="IndexedDB v8" tone="run" />
+          <Row label="Database" value={`IndexedDB v${DB_VERSION}`} tone="run" />
           <Row label="Runtime vault" value="piku-vault/ (planned)" />
         </Card>
         <Card title="Identity" className="col-span-12 md:col-span-6">
