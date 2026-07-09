@@ -7,7 +7,7 @@
 **Local-first ambient AI companion** that builds a personal World Model from conversation and context — on your machine.
 
 <p align="center">
-  <img src="docs/screenshots/app.png" alt="Piku" width="360" />
+  <img src="docs/screenshots/app.png" alt="Piku home — operator dashboard, world model, agent, inbox" width="720" />
 </p>
 
 ## What it does
