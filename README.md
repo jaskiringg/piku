@@ -32,3 +32,9 @@ Node 20+ and a local Ollama install recommended.
 ## Docs
 
 See [`docs/CANONICAL/`](docs/CANONICAL/) for vision, architecture, and roadmap.
+
+## Portfolio design doc
+
+Deep engineering write-up (anti-clone redacted): [docs/portfolio/DESIGN_DOC.md](docs/portfolio/DESIGN_DOC.md)
+
+Also on Singh Atlas: https://jaskiring.up.railway.app/work/piku
