@@ -12,7 +12,7 @@ download: /docs/piku.md
 **Status:** Active development · IndexedDB v8 · Tauri 2 desktop shell  
 **Thesis:** The model is replaceable; the understanding should not be. PIKU is an ambient operating layer that accumulates a private **World Model** of your work, relationships, and decisions — not another stateless chat window.
 
-![PIKU home — ambient OS dashboard with ask bar, projects, and World Model readout](/shots/piku-home.png)
+![PIKU home — ambient OS dashboard with ask bar, projects, and World Model readout](../screenshots/piku-home.png)
 
 ---
 
